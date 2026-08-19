@@ -5,6 +5,8 @@
 use std::collections::HashMap;
 
 use mole_codec::catalog::Catalog;
+use crate::store::{LogStore, Retention, RowKind};
+use crate::watch::WatchStore;
 use mole_codec::frame::{decode_wire, SeqTracker};
 use mole_codec::record::Record;
 use mole_codec::wire;
@@ -28,6 +30,9 @@ pub struct Counts {
 pub struct Pipeline {
     buf: Vec<u8>,
     pub catalog: Catalog,
+    pub logs: LogStore,
+    pub watches: WatchStore,
+    last_dropped_seen: u32,
     seq: SeqTracker,
     pub counts: Counts,
     pub rendered: Vec<String>,
@@ -39,6 +44,9 @@ impl Pipeline {
         Pipeline {
             buf: Vec::new(),
             catalog: Catalog::new(),
+            logs: LogStore::new(Retention::default()),
+            watches: WatchStore::new(crate::watch::DEFAULT_HISTORY),
+            last_dropped_seen: 0,
             seq: SeqTracker::new(),
             counts: Counts::default(),
             rendered: Vec::new(),
@@ -76,8 +84,9 @@ impl Pipeline {
                 for r in &records {
                     self.counts.records += 1;
                     *self.counts.by_type.entry(r.rtype).or_insert(0) += 1;
+                    let t_abs = header.t_base_us + u64::from(r.dt_us);
                     match Record::decode_payload(r.rtype, &r.payload, &self.catalog.types) {
-                        Ok(rec) => self.apply(rec),
+                        Ok(rec) => self.apply(t_abs, rec),
                         Err(_) => self.counts.other_errors += 1,
                     }
                 }
@@ -93,19 +102,31 @@ impl Pipeline {
         }
     }
 
-    fn apply(&mut self, rec: Record) {
+    fn apply(&mut self, t_us: u64, rec: Record) {
         let _ = self.catalog.apply(&rec);
         match &rec {
             Record::Stats(s) => {
                 self.counts.mcu_enqueued = s.enqueued;
                 self.counts.mcu_dropped = s.dropped;
+                // UI-20/PR-14: los drops se marcan DONDE ocurrieron
+                if s.dropped > self.last_dropped_seen {
+                    let delta = s.dropped - self.last_dropped_seen;
+                    self.logs.push_marker(RowKind::DropMark, t_us, delta);
+                    self.last_dropped_seen = s.dropped;
+                }
+            }
+            Record::Watch { sym, value } => {
+                if let Some(v) = value_as_f64(&value) {
+                    self.watches.push(*sym, t_us, v);
+                }
             }
             Record::Counter { entries } => {
                 for (_, delta) in entries {
                     self.counts.counter_delta_sum += u64::from(*delta);
                 }
             }
-            Record::LogFmt { fmt_id, args_raw, level, .. } => {
+            Record::LogFmt { fmt_id, args_raw, level, tag_sym, task_id, core } => {
+                self.logs.push_log(t_us, *level, *tag_sym, *task_id, *core, *fmt_id, args_raw);
                 if self.rendered.len() < self.render_limit {
                     let line = match self.catalog.parse_args(*fmt_id, args_raw) {
                         Ok(args) => {
@@ -170,5 +191,38 @@ impl Pipeline {
             "catalog_syms": self.catalog.sym_count(),
             "catalog_hash": format!("{:08x}", self.catalog.hash()),
         })
+    }
+}
+
+/// Valor de watch como f64 (los escalares; las cadenas van por otra vista).
+fn value_as_f64(v: &mole_codec::args::Value) -> Option<f64> {
+    use mole_codec::args::Value as V;
+    Some(match v {
+        V::U8(x) => f64::from(*x),
+        V::I8(x) => f64::from(*x),
+        V::U16(x) => f64::from(*x),
+        V::I16(x) => f64::from(*x),
+        V::U32(x) => f64::from(*x),
+        V::I32(x) => f64::from(*x),
+        V::U64(x) => *x as f64,
+        V::I64(x) => *x as f64,
+        V::F32(x) => f64::from(*x),
+        V::F64(x) => *x,
+        V::Bool(x) => f64::from(u8::from(*x)),
+        _ => return None,
+    })
+}
+
+/// Renderiza una línea de log desde sus args crudos (REC-39: perezoso).
+pub fn render_log(catalog: &Catalog, fmt_id: u16, args_raw: &[u8]) -> String {
+    match catalog.parse_args(fmt_id, args_raw) {
+        Ok(args) => {
+            let fmt = catalog
+                .fmt(fmt_id)
+                .map(|f| String::from_utf8_lossy(&f.fmt).into_owned())
+                .unwrap_or_else(|| "<fmt?>".into());
+            mole_fmt::format(&fmt, &args, catalog)
+        }
+        Err(e) => format!("<args: {e}>"),
     }
 }

@@ -313,6 +313,131 @@ fn cmd_bench(port_name: &str, baud: u32, baseline: Option<String>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// RSS pico del proceso en bytes (getrusage; en macOS ya viene en bytes,
+/// en Linux en KB).
+fn peak_rss_bytes() -> u64 {
+    let mut ru = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    // SAFETY: getrusage escribe la estructura completa antes de retornar
+    #[allow(unsafe_code)]
+    let r = unsafe { libc::getrusage(libc::RUSAGE_SELF, ru.as_mut_ptr()) };
+    if r != 0 {
+        return 0;
+    }
+    #[allow(unsafe_code)]
+    let ru = unsafe { ru.assume_init() };
+    let raw = ru.ru_maxrss as u64;
+    if cfg!(target_os = "macos") {
+        raw
+    } else {
+        raw * 1024
+    }
+}
+
+/// F2-A06: PERF-10 (RAM con 10M) y PERF-11 (filtrar 10M por tag+texto).
+fn cmd_bench_store(records: u64) -> ExitCode {
+    use mole_codec::args::ArgType;
+    use mole_codec::record::{FmtDef, Record};
+    use mole_codec::wire::WireType;
+    use mole_host::{filter_indices, LogFilter, TextFilter};
+
+    let mut p = Pipeline::new(0);
+    // catálogo representativo: 30 tags, 50 sitios de log
+    let reg = mole_codec::types::TypeRegistry::new();
+    let _ = reg;
+    for t in 1..=30u16 {
+        p.catalog
+            .apply(&Record::SymDef {
+                sym_id: t,
+                kind: 2,
+                parent: 0,
+                name: format!("tag{t}").into_bytes(),
+            })
+            .unwrap();
+    }
+    for f in 1..=50u16 {
+        p.catalog
+            .apply(&Record::FmtDef(FmtDef {
+                fmt_id: f,
+                file_sym: 0,
+                line: f,
+                arg_types: vec![ArgType::Scalar(WireType::I32), ArgType::Scalar(WireType::F32)],
+                fmt: format!("sitio{f} crudo={{}} v={{:.2}}").into_bytes(),
+            }))
+            .unwrap();
+    }
+
+    // ingesta directa al store (HOST-07); el camino de wire ya tiene su
+    // benchmark propio (bench-decoder)
+    let t0 = Instant::now();
+    for i in 0..records {
+        let mut args = [0u8; 8];
+        args[..4].copy_from_slice(&(i as i32).to_le_bytes());
+        args[4..].copy_from_slice(&(i as f32).to_le_bytes().map(|b| b));
+        p.logs.push_log(
+            i,
+            (i % 6) as u8,
+            (i % 30 + 1) as u16,
+            (i % 4) as u8,
+            (i % 2) as u8,
+            (i % 50 + 1) as u16,
+            &args,
+        );
+    }
+    let ingest = t0.elapsed();
+
+    let run_filter = |p: &Pipeline, f: &LogFilter| -> (usize, f64) {
+        let mut out = Vec::new();
+        let t = Instant::now();
+        filter_indices(&p.logs, &p.catalog, f, p.logs.first_index(),
+                       p.logs.total_ingested(), &mut out);
+        (out.len(), t.elapsed().as_secs_f64() * 1000.0)
+    };
+
+    // PERF-11: tag + texto
+    let (n1, ms_tag_text) = run_filter(&p, &LogFilter {
+        tags: Some(vec![7]),
+        text: TextFilter::Substring("crudo=12".into()),
+        ..Default::default()
+    });
+    let (n2, ms_tag) = run_filter(&p, &LogFilter {
+        tags: Some(vec![7]),
+        ..Default::default()
+    });
+    let (n3, ms_level) = run_filter(&p, &LogFilter {
+        levels_mask: 1 << 4,
+        ..Default::default()
+    });
+
+    let store_bytes = p.logs.approx_bytes() as u64;
+    let rss = peak_rss_bytes();
+    let perf10_ok = rss < 1_500_000_000;
+    let perf11_ok = ms_tag_text < 300.0;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "records": records,
+            "ingesta_seg": ingest.as_secs_f64(),
+            "ingesta_rec_s": (records as f64 / ingest.as_secs_f64()) as u64,
+            "store_bytes": store_bytes,
+            "rss_pico_bytes": rss,
+            "filtros_ms": {
+                "tag_y_texto": ms_tag_text,
+                "solo_tag": ms_tag,
+                "solo_nivel": ms_level,
+            },
+            "matches": { "tag_y_texto": n1, "solo_tag": n2, "solo_nivel": n3 },
+            "perf10_ok": perf10_ok,
+            "perf11_ok": perf11_ok,
+        }))
+        .unwrap()
+    );
+    if perf10_ok && perf11_ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let render = arg_value(&args, "--render")
@@ -339,6 +464,12 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("bench-store") => {
+            let records = arg_value(&args, "--records")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10_000_000u64);
+            cmd_bench_store(records)
+        }
         Some("bench-decoder") => {
             let frames = arg_value(&args, "--frames")
                 .and_then(|v| v.parse().ok())

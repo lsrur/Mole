@@ -4,12 +4,16 @@
 //! HOST-14 exige que todas las ventanas consuman el mismo contrato, y la
 //! forma de garantizarlo es que haya un solo pipeline.
 
+pub mod filter;
 pub mod pipeline;
 pub mod store;
+pub mod tick;
 pub mod transport;
 pub mod watch;
 
-pub use pipeline::{Counts, Pipeline};
+pub use filter::{filter_indices, LogFilter, TextFilter};
+pub use pipeline::{render_log, Counts, Pipeline};
 pub use store::{LogStore, Retention, RowKind};
+pub use tick::{log_slice_raw, make_tick, query, TickState};
 pub use transport::{FileReplay, SerialTransport, Transport};
 pub use watch::{WatchStats, WatchStore};

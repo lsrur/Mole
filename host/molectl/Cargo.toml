@@ -14,3 +14,4 @@ mole-host = { path = "../mole-host" }
 mole-fmt = { path = "../mole-fmt" }
 serialport = "4"
 serde_json = "1"
+libc = "0.2.189"
