@@ -288,6 +288,16 @@ inline void log_site(std::atomic<uint16_t>* fid, Level lvl, SymId tag,
         return _s;                                                              \
     }())
 
+// Span con RAII (REC-18): cierra al salir del scope. El sym se interna una
+// sola vez (CAT-02).
+#define MOLE_SPAN_CAT2_(a, b) a##b
+#define MOLE_SPAN_CAT_(a, b) MOLE_SPAN_CAT2_(a, b)
+#define MOLE_SPAN(name)                                                       \
+    static const ::mole::SymId MOLE_SPAN_CAT_(_mole_ssym_, __LINE__) =        \
+        ::mole::intern(name, ::mole::KIND_SPAN, 0);                           \
+    ::mole::ScopedSpan MOLE_SPAN_CAT_(_mole_span_, __LINE__)(                 \
+        MOLE_SPAN_CAT_(_mole_ssym_, __LINE__))
+
 #define MOLE_TRACE(fmt, ...) MOLE_LOG_AT_(::mole::Level::Trace, 0, fmt, ##__VA_ARGS__)
 #define MOLE_DEBUG(fmt, ...) MOLE_LOG_AT_(::mole::Level::Debug, 0, fmt, ##__VA_ARGS__)
 #define MOLE_INFO(fmt, ...) MOLE_LOG_AT_(::mole::Level::Info, 0, fmt, ##__VA_ARGS__)
@@ -304,6 +314,7 @@ inline void log_site(std::atomic<uint16_t>* fid, Level lvl, SymId tag,
 
 #else  // !MOLE_ENABLED — FW-12
 
+#define MOLE_SPAN(name) ((void)0)
 #define MOLE_TRACE(...) ((void)0)
 #define MOLE_DEBUG(...) ((void)0)
 #define MOLE_INFO(...) ((void)0)

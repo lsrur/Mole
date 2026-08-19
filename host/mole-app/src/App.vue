@@ -33,8 +33,21 @@ function defaultLayout(api) {
     component: "watch-panel",
     title: "Watch",
     position: { referencePanel: "log", direction: "right" },
-    initialWidth: 420,
+    initialWidth: 460,
   });
+  api.addPanel({
+    id: "spans",
+    component: "spans-panel",
+    title: "Spans",
+    position: { referencePanel: "watch", direction: "within" },
+  });
+  api.addPanel({
+    id: "cmds",
+    component: "cmds-panel",
+    title: "Comandos",
+    position: { referencePanel: "watch", direction: "within" },
+  });
+  api.getPanel("watch")?.api.setActive();
 }
 
 function onDockReady(event) {
@@ -157,7 +170,10 @@ const linkClass = computed(() => {
 <template>
   <!-- ventana desprendida: solo el panel, mismo contrato IPC (HOST-14) -->
   <div v-if="panelMode" class="shell">
-    <component :is="panelMode === 'watch' ? 'watch-panel' : 'log-panel'" class="center" />
+    <component
+      :is="{ watch: 'watch-panel', spans: 'spans-panel', cmds: 'cmds-panel' }[panelMode] ?? 'log-panel'"
+      class="center"
+    />
     <div class="statusbar">
       <span>{{ panelMode }} — ventana desprendida</span>
       <span class="grow"></span>

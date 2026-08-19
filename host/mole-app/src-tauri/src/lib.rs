@@ -311,6 +311,37 @@ fn demo_start(state: AppState, rate: u32) -> Result<String, String> {
         let mut seq: u16 = 0;
         let mut t_us: u64 = 1_000_000;
         let mut i: u32 = 0;
+        let mut span_id: u16 = 1;
+        // spans y comandos del demo: syms 3/4 (spans), 5/6 (comandos)
+        let mut defs = defs;
+        for (id, kind, name) in [
+            (3u16, 6u8, &b"tx_cycle"[..]),
+            (4, 6, b"build_frame"),
+            (5, 5, b"Reset radio"),
+            (6, 5, b"Set channel"),
+        ] {
+            defs.push(
+                Record::SymDef { sym_id: id, kind, parent: 0, name: name.to_vec() }
+                    .encode(0, &reg)
+                    .unwrap_or_default(),
+            );
+        }
+        defs.push(
+            Record::CmdDef { cmd_id: 1, sym: 5, arg_type: 0, min: None, max: None }
+                .encode(0, &reg)
+                .unwrap_or_default(),
+        );
+        defs.push(
+            Record::CmdDef {
+                cmd_id: 2,
+                sym: 6,
+                arg_type: 0x06,
+                min: Some(mole_codec::args::Value::I32(0)),
+                max: Some(mole_codec::args::Value::I32(15)),
+            }
+            .encode(0, &reg)
+            .unwrap_or_default(),
+        );
         if let Ok((_, wire)) = encode_frame(seq, t_us, 0, &defs) {
             seq = seq.wrapping_add(1);
             if let Ok(mut p) = shared.pipeline.lock() {
@@ -350,6 +381,25 @@ fn demo_start(state: AppState, rate: u32) -> Result<String, String> {
                 }
                 i = i.wrapping_add(1);
             }
+            // un árbol de spans por tanda: tx_cycle conteniendo build_frame,
+            // con jitter y un outlier cada ~200 iteraciones (para el p99)
+            {
+                let tx = span_id;
+                span_id = span_id.wrapping_add(1).max(1);
+                let build = span_id;
+                span_id = span_id.wrapping_add(1).max(1);
+                let jitter = u64::from(i % 37) * 20;
+                let outlier = if i % 4000 < 20 { 9000 } else { 0 };
+                let mut p = |rec: Record, dt: u16| {
+                    if let Ok(b) = rec.encode(dt, &reg) {
+                        recs.push(b);
+                    }
+                };
+                p(Record::SpanBegin { span_id: tx, sym: 3, parent_span_id: 0, task_id: 1 }, 0);
+                p(Record::SpanBegin { span_id: build, sym: 4, parent_span_id: tx, task_id: 1 }, 100);
+                p(Record::SpanEnd { span_id: build }, (600 + jitter) as u16);
+                p(Record::SpanEnd { span_id: tx }, (2500 + jitter + outlier) as u16);
+            }
             // en frames de a 200 (PR-04 los limita por tamaño igual)
             for chunk in recs.chunks(200) {
                 if let Ok((_, wire)) = encode_frame(seq, t_us, 0, chunk) {
@@ -364,6 +414,75 @@ fn demo_start(state: AppState, rate: u32) -> Result<String, String> {
         }
     });
     Ok(format!("demo a {rate} rec/s"))
+}
+
+/// Tabla de spans (UI-31): n, total, media, p50/p95/p99, max (REC-19).
+#[tauri::command]
+fn span_snapshot(state: AppState) -> Result<Vec<serde_json::Value>, String> {
+    let p = state.pipeline.lock().map_err(|e| e.to_string())?;
+    Ok(p.spans
+        .snapshot()
+        .into_iter()
+        .map(|r| {
+            let name = p
+                .catalog
+                .sym(r.sym)
+                .map(|s| String::from_utf8_lossy(&s.name).into_owned())
+                .unwrap_or_else(|| format!("#{}", r.sym));
+            let mut v = serde_json::to_value(&r).unwrap_or_default();
+            v["name"] = serde_json::json!(name);
+            v
+        })
+        .collect())
+}
+
+/// Comandos declarados por el firmware (REC-30): la UI se genera de acá.
+#[tauri::command]
+fn command_list(state: AppState) -> Result<Vec<serde_json::Value>, String> {
+    let p = state.pipeline.lock().map_err(|e| e.to_string())?;
+    Ok(p.commands
+        .iter()
+        .map(|c| {
+            let name = p
+                .catalog
+                .sym(c.sym)
+                .map(|s| String::from_utf8_lossy(&s.name).into_owned())
+                .unwrap_or_else(|| format!("#{}", c.sym));
+            let mut v = serde_json::to_value(c).unwrap_or_default();
+            v["name"] = serde_json::json!(name);
+            v
+        })
+        .collect())
+}
+
+/// FEAT-27: invoca un comando del firmware (CTL_CMD por downlink).
+#[tauri::command]
+fn send_command(
+    state: AppState,
+    cmd_id: u16,
+    arg_type: u8,
+    value: Option<f64>,
+) -> Result<(), String> {
+    use mole_codec::args::Value;
+    use mole_codec::frame::encode_frame;
+    use mole_codec::record::Record;
+    use mole_codec::types::TypeRegistry;
+    let arg = match (arg_type, value) {
+        (0, _) => None,
+        (0x06, Some(v)) => Some(Value::I32(v as i32)),
+        (0x09, Some(v)) => Some(Value::F32(v as f32)),
+        _ => return Err("argumento invalido para el tipo del comando".into()),
+    };
+    let reg = TypeRegistry::new();
+    let rec = Record::CtlCmd { cmd_id, arg_type, arg }
+        .encode(0, &reg)
+        .map_err(|e| e.to_string())?;
+    let (_, wire) = encode_frame(0, 0, 0, &[rec]).map_err(|e| e.to_string())?;
+    let guard = state.downlink_tx.lock().map_err(|e| e.to_string())?;
+    match guard.as_ref() {
+        Some(tx) => tx.send(wire).map_err(|e| e.to_string()),
+        None => Err("sin transporte con downlink (replay o demo)".into()),
+    }
 }
 
 /// FEAT-07 / UI-07: desprender un panel a ventana propia. Veredicto del
@@ -417,6 +536,9 @@ pub fn run() {
             set_tag_level,
             demo_start,
             detach_panel,
+            span_snapshot,
+            command_list,
+            send_command,
             source_desc
         ])
         .setup(move |app| {

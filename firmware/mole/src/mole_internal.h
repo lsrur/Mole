@@ -176,6 +176,12 @@ uint16_t sym_table_count();
 bool sym_table_entry(uint16_t idx, uint8_t* payload, uint8_t* len);  // payload REC_SYM_DEF
 uint16_t fmt_table_count();
 bool fmt_table_entry(uint16_t idx, uint8_t* payload, uint8_t* len);  // payload REC_FMT_DEF
+uint16_t cmd_table_count();
+bool cmd_table_entry(uint16_t idx, uint8_t* payload, uint8_t* len);  // payload REC_CMD_DEF
+
+// Despacho de CTL_CMD en la moleTask (REC-31).
+bool command_dispatch(uint16_t cmd_id, uint8_t arg_type, const uint8_t* arg,
+                      uint8_t arg_len);
 size_t type_reemit_count();
 void run_type_reemit(size_t i);
 

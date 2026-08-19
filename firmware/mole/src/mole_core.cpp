@@ -75,6 +75,26 @@ struct Core {
     CounterSlot counters[kMaxCounters];
     std::atomic<uint32_t> counter_lost_isr{0};
 
+    // ---- spans (REC-18..21): contador global + stack por productor ----
+    std::atomic<uint16_t> span_next{1};
+    uint16_t span_stack[MOLE_MAX_PRODUCERS][8] = {};
+    uint8_t span_depth[MOLE_MAX_PRODUCERS] = {};
+
+    // ---- comandos (REC-29..31) ----
+    static constexpr size_t kMaxCommands = 32;
+    struct CmdSlot {
+        const char* label = nullptr;
+        uint16_t sym = 0;
+        uint8_t arg_type = 0;  // 0 = sin argumento (draft.10)
+        void (*fn0)() = nullptr;
+        void (*fn_i32)(int32_t) = nullptr;
+        void (*fn_f32)(float) = nullptr;
+        int32_t min_i = 0, max_i = 0;
+        float min_f = 0, max_f = 0;
+    };
+    CmdSlot cmds[kMaxCommands];
+    uint16_t cmd_count = 0;
+
     // ---- log diferido (REC-34) y niveles (PR-19) ----
     std::atomic<uint16_t> fmt_next{1};
     // retención para el resync (CAT-10): lo justo para reconstruir el
@@ -221,6 +241,10 @@ void reset_for_tests() {
     c.type_reemit_n.store(0);
     for (auto& s : c.fmt_slots) s = Core::FmtSlot{};
     c.fmt_next.store(1);
+    c.span_next.store(1);
+    for (auto& d : c.span_depth) d = 0;
+    for (auto& s : c.cmds) s = Core::CmdSlot{};
+    c.cmd_count = 0;
     for (auto& p : c.policies) p.store(static_cast<uint8_t>(Policy::DropNewest));
     c.enqueued.store(0);
     c.dropped.store(0);
@@ -735,6 +759,177 @@ void event(const char* name, uint32_t arg) {
     put_u32(payload + 2, arg);
     detail::ring_push(REC_EVENT, payload, 6);
 }
+
+// ---------------------------------------------------------------------------
+// Spans (REC-18..21)
+// ---------------------------------------------------------------------------
+
+namespace detail {
+
+uint16_t span_begin(SymId sym) {
+    Core& c = core();
+    // contador GLOBAL de instancias (REC-21, draft.9); 0 se saltea
+    uint16_t id = c.span_next.fetch_add(1, std::memory_order_relaxed);
+    if (id == 0) id = c.span_next.fetch_add(1, std::memory_order_relaxed);
+    const uint8_t slot = port::task_slot();
+    uint16_t parent = 0;
+    if (slot < MOLE_MAX_PRODUCERS) {
+        const uint8_t d = c.span_depth[slot];
+        if (d > 0 && d <= 8) parent = c.span_stack[slot][d - 1];
+        if (d < 8) {
+            c.span_stack[slot][d] = id;
+            c.span_depth[slot] = d + 1;
+        }
+    }
+    uint8_t payload[7];
+    put_u16(payload, id);
+    put_u16(payload + 2, sym);
+    put_u16(payload + 4, parent);
+    payload[6] = slot;
+    ring_push(REC_SPAN_BEGIN, payload, 7);
+    return id;
+}
+
+void span_end(uint16_t span_id) {
+    Core& c = core();
+    const uint8_t slot = port::task_slot();
+    if (slot < MOLE_MAX_PRODUCERS && c.span_depth[slot] > 0) {
+        c.span_depth[slot]--;
+    }
+    uint8_t payload[2];
+    put_u16(payload, span_id);
+    ring_push(REC_SPAN_END, payload, 2);
+}
+
+}  // namespace detail
+
+// ---------------------------------------------------------------------------
+// Comandos (REC-29..31)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+uint16_t command_register(Core& c, const char* label, uint8_t arg_type) {
+    std::lock_guard<std::mutex> lock(c.mtx);
+    if (c.cmd_count >= Core::kMaxCommands) return 0;
+    const uint16_t id = c.cmd_count + 1;
+    Core::CmdSlot& s = c.cmds[c.cmd_count];
+    s.label = label;
+    s.arg_type = arg_type;
+    c.cmd_count++;
+    return id;
+}
+
+// payload REC_CMD_DEF (draft.10): cmd_id, sym, arg_type, min[], max[]
+uint8_t build_cmd_payload(const Core::CmdSlot& s, uint16_t id, uint8_t* payload) {
+    put_u16(payload, id);
+    put_u16(payload + 2, s.sym);
+    payload[4] = s.arg_type;
+    uint8_t p = 5;
+    if (s.arg_type == WIRE_I32) {
+        put_u32(payload + p, static_cast<uint32_t>(s.min_i));
+        put_u32(payload + p + 4, static_cast<uint32_t>(s.max_i));
+        p += 8;
+    } else if (s.arg_type == WIRE_F32) {
+        std::memcpy(payload + p, &s.min_f, 4);
+        std::memcpy(payload + p + 4, &s.max_f, 4);
+        p += 8;
+    }
+    return p;
+}
+
+void command_emit_def(Core& c, uint16_t id) {
+    uint8_t payload[16];
+    const uint8_t p = build_cmd_payload(c.cmds[id - 1], id, payload);
+    // no alimenta el catalog_hash (CAT-08 no lista CMD_DEF)
+    detail::meta_push_no_hash(REC_CMD_DEF, payload, p);
+}
+
+}  // namespace
+
+void command(const char* label, void (*fn)()) {
+    Core& c = core();
+    const uint16_t id = command_register(c, label, 0);
+    if (id == 0) return;
+    c.cmds[id - 1].fn0 = fn;
+    c.cmds[id - 1].sym = intern(label, KIND_COMMAND);
+    command_emit_def(c, id);
+}
+
+void command(const char* label, void (*fn)(int32_t), int32_t min, int32_t max) {
+    Core& c = core();
+    const uint16_t id = command_register(c, label, WIRE_I32);
+    if (id == 0) return;
+    Core::CmdSlot& s = c.cmds[id - 1];
+    s.fn_i32 = fn;
+    s.min_i = min;
+    s.max_i = max;
+    s.sym = intern(label, KIND_COMMAND);
+    command_emit_def(c, id);
+}
+
+void command(const char* label, void (*fn)(float), float min, float max) {
+    Core& c = core();
+    const uint16_t id = command_register(c, label, WIRE_F32);
+    if (id == 0) return;
+    Core::CmdSlot& s = c.cmds[id - 1];
+    s.fn_f32 = fn;
+    s.min_f = min;
+    s.max_f = max;
+    s.sym = intern(label, KIND_COMMAND);
+    command_emit_def(c, id);
+}
+
+namespace detail {
+
+// Despacho de CTL_CMD (REC-31): corre en la moleTask (PR-17).
+bool command_dispatch(uint16_t cmd_id, uint8_t arg_type, const uint8_t* arg,
+                      uint8_t arg_len) {
+    Core& c = core();
+    if (cmd_id == 0 || cmd_id > c.cmd_count) return false;
+    const Core::CmdSlot& s = c.cmds[cmd_id - 1];
+    if (arg_type != s.arg_type) return false;
+    switch (s.arg_type) {
+        case 0:
+            if (s.fn0) s.fn0();
+            return true;
+        case WIRE_I32: {
+            if (arg_len < 4 || !s.fn_i32) return false;
+            int32_t v = static_cast<int32_t>(get_u32(arg));
+            if (v < s.min_i) v = s.min_i;
+            if (v > s.max_i) v = s.max_i;
+            s.fn_i32(v);
+            return true;
+        }
+        case WIRE_F32: {
+            if (arg_len < 4 || !s.fn_f32) return false;
+            float v;
+            std::memcpy(&v, arg, 4);
+            if (v < s.min_f) v = s.min_f;
+            if (v > s.max_f) v = s.max_f;
+            s.fn_f32(v);
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
+uint16_t cmd_table_count() {
+    Core& c = core();
+    std::lock_guard<std::mutex> lock(c.mtx);
+    return c.cmd_count;
+}
+
+bool cmd_table_entry(uint16_t idx, uint8_t* payload, uint8_t* len) {
+    Core& c = core();
+    std::lock_guard<std::mutex> lock(c.mtx);
+    if (idx >= c.cmd_count) return false;
+    *len = build_cmd_payload(c.cmds[idx], static_cast<uint16_t>(idx + 1), payload);
+    return true;
+}
+
+}  // namespace detail
 
 void set_min_level(Level lvl) {
     core().min_level.store(static_cast<uint8_t>(lvl), std::memory_order_relaxed);

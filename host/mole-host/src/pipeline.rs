@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use mole_codec::catalog::Catalog;
 use crate::store::{LogStore, Retention, RowKind};
+use crate::span::SpanStore;
 use crate::watch::WatchStore;
 use mole_codec::frame::{decode_wire, SeqTracker};
 use mole_codec::record::Record;
@@ -32,6 +33,8 @@ pub struct Pipeline {
     pub catalog: Catalog,
     pub logs: LogStore,
     pub watches: WatchStore,
+    pub spans: SpanStore,
+    pub commands: Vec<CmdInfo>,
     last_dropped_seen: u32,
     seq: SeqTracker,
     pub counts: Counts,
@@ -46,6 +49,8 @@ impl Pipeline {
             catalog: Catalog::new(),
             logs: LogStore::new(Retention::default()),
             watches: WatchStore::new(crate::watch::DEFAULT_HISTORY),
+            spans: SpanStore::default(),
+            commands: Vec::new(),
             last_dropped_seen: 0,
             seq: SeqTracker::new(),
             counts: Counts::default(),
@@ -123,6 +128,28 @@ impl Pipeline {
             Record::Counter { entries } => {
                 for (_, delta) in entries {
                     self.counts.counter_delta_sum += u64::from(*delta);
+                }
+            }
+            Record::SpanBegin { span_id, sym, .. } => {
+                self.spans.push_begin(*span_id, *sym, t_us);
+            }
+            Record::SpanEnd { span_id } => {
+                self.spans.push_end(*span_id, t_us);
+            }
+            Record::SpanAbort { span_id, .. } => {
+                self.spans.push_abort(*span_id);
+            }
+            Record::CmdDef { cmd_id, sym, arg_type, min, max } => {
+                let info = CmdInfo {
+                    cmd_id: *cmd_id,
+                    sym: *sym,
+                    arg_type: *arg_type,
+                    min: min.as_ref().and_then(value_as_f64),
+                    max: max.as_ref().and_then(value_as_f64),
+                };
+                match self.commands.iter_mut().find(|c| c.cmd_id == info.cmd_id) {
+                    Some(slot) => *slot = info,
+                    None => self.commands.push(info),
                 }
             }
             Record::LogFmt { fmt_id, args_raw, level, tag_sym, task_id, core } => {
@@ -225,4 +252,16 @@ pub fn render_log(catalog: &Catalog, fmt_id: u16, args_raw: &[u8]) -> String {
         }
         Err(e) => format!("<args: {e}>"),
     }
+}
+
+
+/// Comando declarado por el firmware (REC-29/REC-30): con esto el desktop
+/// genera la UI solo.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CmdInfo {
+    pub cmd_id: u16,
+    pub sym: u16,
+    pub arg_type: u8,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
 }

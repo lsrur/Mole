@@ -91,6 +91,32 @@ inline void watchEvery(const char* label, T value, uint32_t ms) {
     }
 }
 
+// ---- spans (REC-18..21): medición de bloques con RAII, anidables ----
+
+namespace detail {
+uint16_t span_begin(SymId sym);
+void span_end(uint16_t span_id);
+}  // namespace detail
+
+class ScopedSpan {
+  public:
+    explicit ScopedSpan(SymId sym) : id_(detail::span_begin(sym)) {}
+    ~ScopedSpan() { detail::span_end(id_); }
+    ScopedSpan(const ScopedSpan&) = delete;
+    ScopedSpan& operator=(const ScopedSpan&) = delete;
+
+  private:
+    uint16_t id_;
+};
+
+// ---- comandos (REC-29..31): la UI se genera desde el firmware ----
+
+// Sin argumento: botón en el desktop.
+void command(const char* label, void (*fn)());
+// Con argumento numérico y rango: slider/campo numérico.
+void command(const char* label, void (*fn)(int32_t), int32_t min, int32_t max);
+void command(const char* label, void (*fn)(float), float min, float max);
+
 // Contador agregado en el MCU (REC-22..24). Seguro desde ISR una vez que el
 // contador existe: la PRIMERA llamada debe ocurrir en contexto de tarea
 // (registra el símbolo); desde ISR un contador desconocido se pierde
@@ -141,6 +167,13 @@ template <class... A>
 inline void watchEvery(A&&...) {}
 inline void count(const char*, uint32_t = 1) {}
 inline void event(const char*, uint32_t = 0) {}
+
+class ScopedSpan {
+  public:
+    explicit ScopedSpan(SymId) {}
+};
+template <class... A>
+inline void command(A&&...) {}
 
 }  // namespace mole
 

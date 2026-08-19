@@ -194,6 +194,13 @@ void resync_catalog(TaskState& st, FrameSink sink, void* ctx) {
             add_record(st, sink, ctx, REC_FMT_DEF, port::now_us(), payload, len, 0x1);
         }
     }
+    // los comandos también se re-anuncian: el desktop genera su UI de acá
+    const uint16_t ncmds = cmd_table_count();
+    for (uint16_t i = 0; i < ncmds; i++) {
+        if (cmd_table_entry(i, payload, &len)) {
+            add_record(st, sink, ctx, REC_CMD_DEF, port::now_us(), payload, len, 0x1);
+        }
+    }
 }
 
 void apply_ctl(TaskState& st, FrameSink sink, void* ctx, uint8_t type,
@@ -219,6 +226,12 @@ void apply_ctl(TaskState& st, FrameSink sink, void* ctx, uint8_t type,
             uint8_t pong[4];
             std::memcpy(pong, p, 4);
             add_record(st, sink, ctx, REC_PONG, port::now_us(), pong, 4, 0);
+            break;
+        }
+        case CTL_CMD: {
+            if (len < 3) return;
+            const uint16_t cmd_id = get_u16(p);
+            command_dispatch(cmd_id, p[2], p + 3, static_cast<uint8_t>(len - 3));
             break;
         }
         case CTL_SET_LEVEL: {

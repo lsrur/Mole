@@ -937,6 +937,90 @@ static void test_session_no_solicitada() {
     CHECK(count_types(cap).at(0x01) >= 3);
 }
 
+// ---------------------------------------------------------------------------
+// F3/F5 adelantados: spans y comandos
+// ---------------------------------------------------------------------------
+
+static int g_cmd_calls = 0;
+static int32_t g_cmd_last_arg = -1;
+
+static void test_spans_anidados() {
+    mole::detail::reset_for_tests();
+    {
+        MOLE_SPAN("tx_cycle");
+        {
+            MOLE_SPAN("build_frame");
+        }
+    }
+    uint8_t buf[255], type, len;
+    uint64_t t;
+    // BEGIN tx, BEGIN build (parent=tx), END build, END tx
+    CHECK(pop_ring0(&type, &t, buf, &len));
+    CHECK(type == mole::REC_SPAN_BEGIN);
+    const uint16_t tx_id = mole::get_u16(buf);
+    CHECK(mole::get_u16(buf + 4) == 0);  // sin parent
+    CHECK(pop_ring0(&type, &t, buf, &len));
+    CHECK(type == mole::REC_SPAN_BEGIN);
+    const uint16_t build_id = mole::get_u16(buf);
+    CHECK(mole::get_u16(buf + 4) == tx_id);  // anidado
+    CHECK(pop_ring0(&type, &t, buf, &len));
+    CHECK(type == mole::REC_SPAN_END);
+    CHECK(mole::get_u16(buf) == build_id);
+    CHECK(pop_ring0(&type, &t, buf, &len));
+    CHECK(type == mole::REC_SPAN_END);
+    CHECK(mole::get_u16(buf) == tx_id);
+    CHECK(tx_id != build_id);  // contador global (REC-21)
+}
+
+static void test_comandos_def_y_dispatch() {
+    mole::detail::reset_for_tests();
+    g_cmd_calls = 0;
+    g_cmd_last_arg = -1;
+    mole::command("Reset radio", []() { g_cmd_calls++; });
+    mole::command(
+        "Set channel", [](int32_t ch) { g_cmd_last_arg = ch; }, 0, 15);
+
+    // defs emitidos (syms + 2 CMD_DEF)
+    int cmd_defs = 0;
+    mole::detail::MetaView mv;
+    uint8_t buf[255];
+    uint8_t chan_def[16];
+    uint8_t chan_len = 0;
+    while (pop_meta(&mv, buf)) {
+        if (mv.type == mole::REC_CMD_DEF) {
+            cmd_defs++;
+            if (mv.payload[4] == mole::WIRE_I32) {
+                std::memcpy(chan_def, mv.payload, mv.len);
+                chan_len = mv.len;
+            }
+        }
+    }
+    CHECK(cmd_defs == 2);
+    CHECK(chan_len == 13);  // 2+2+1+4+4
+    CHECK(mole::get_u32(chan_def + 5) == 0 && mole::get_u32(chan_def + 9) == 15);
+
+    // despacho via downlink real (CTL_CMD por frame, PR-15..17)
+    mole::detail::TaskState st;
+    WireCapture cap;
+    auto hello = ctl_hello(0, 0);
+    mole::detail::downlink_feed(st, capture_sink, &cap, hello.data(), hello.size());
+    auto cmd1 = ctl_frame(mole::CTL_CMD, {1, 0, 0});  // Reset radio, sin arg
+    mole::detail::downlink_feed(st, capture_sink, &cap, cmd1.data(), cmd1.size());
+    CHECK(g_cmd_calls == 1);
+    // Set channel = 11
+    auto cmd2 = ctl_frame(mole::CTL_CMD, {2, 0, mole::WIRE_I32, 11, 0, 0, 0});
+    mole::detail::downlink_feed(st, capture_sink, &cap, cmd2.data(), cmd2.size());
+    CHECK(g_cmd_last_arg == 11);
+    // arg fuera de rango: clampeado
+    auto cmd3 = ctl_frame(mole::CTL_CMD, {2, 0, mole::WIRE_I32, 99, 0, 0, 0});
+    mole::detail::downlink_feed(st, capture_sink, &cap, cmd3.data(), cmd3.size());
+    CHECK(g_cmd_last_arg == 15);
+    // cmd_id inexistente: ignorado sin drama
+    auto cmd4 = ctl_frame(mole::CTL_CMD, {9, 0, 0});
+    mole::detail::downlink_feed(st, capture_sink, &cap, cmd4.data(), cmd4.size());
+    CHECK(g_cmd_calls == 1);
+}
+
 int main() {
     test_intern_secuencial_y_dedup();
     test_sym_def_bytes_contra_vector();
@@ -961,6 +1045,8 @@ int main() {
     test_hello_resync_y_late_join();
     test_ctl_ping_y_set_level();
     test_session_no_solicitada();
+    test_spans_anidados();
+    test_comandos_def_y_dispatch();
     if (g_fails == 0) {
         std::puts("core_test: ok");
         return 0;

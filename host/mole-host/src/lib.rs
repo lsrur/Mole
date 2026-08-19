@@ -6,13 +6,15 @@
 
 pub mod filter;
 pub mod pipeline;
+pub mod span;
 pub mod store;
 pub mod tick;
 pub mod transport;
 pub mod watch;
 
 pub use filter::{filter_indices, LogFilter, TextFilter};
-pub use pipeline::{render_log, Counts, Pipeline};
+pub use pipeline::{render_log, CmdInfo, Counts, Pipeline};
+pub use span::{SpanRow, SpanStore};
 pub use store::{LogStore, Retention, RowKind};
 pub use regex::Regex;
 pub use tick::{log_slice_raw, make_tick, query, TickState};

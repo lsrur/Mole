@@ -1875,6 +1875,7 @@ dependencies = [
  "mole-codec",
  "mole-fmt",
  "regex",
+ "serde",
  "serde_json",
  "serialport",
 ]
