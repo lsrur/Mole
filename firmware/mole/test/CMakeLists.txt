@@ -61,3 +61,14 @@ add_test(
   COMMAND codec_test ${CMAKE_CURRENT_SOURCE_DIR}/../../../protocol/codec_vectors.json
 )
 add_test(NAME core_test COMMAND core_test)
+
+# FW-12: con MOLE_ENABLED=0 la instrumentación compila a nada. La sonda usa
+# literales SECRETO_* y el test exige que ninguno sobreviva en el binario.
+add_executable(disabled_probe disabled_probe.cpp)
+target_include_directories(disabled_probe PRIVATE ../include ../src)
+target_compile_definitions(disabled_probe PRIVATE MOLE_ENABLED=0)
+target_compile_options(disabled_probe PRIVATE -O2 -Wall -Wextra -Werror)
+add_test(
+  NAME costo_cero_sin_strings
+  COMMAND sh -c "! strings $<TARGET_FILE:disabled_probe> | grep -q SECRETO"
+)

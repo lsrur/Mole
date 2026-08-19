@@ -5,6 +5,7 @@ idf_component_register(
         "src/mole_codec.cpp"
         "src/mole_core.cpp"
         "src/mole_task.cpp"
+        "src/mole_port_esp.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "src"
     PRIV_REQUIRES esp_timer

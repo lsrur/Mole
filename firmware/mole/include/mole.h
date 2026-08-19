@@ -98,8 +98,34 @@ Stats stats();
 
 }  // namespace mole
 
-#else  // !MOLE_ENABLED — FW-12: todo compila a nada
+#else  // !MOLE_ENABLED — FW-12: todo compila a nada, sin strings ni símbolos
+// (Level/SymId/Stats vienen de mole_log.h, que se incluye siempre; acá solo
+// los stubs inline vacíos. Con -O, los literales de los argumentos no
+// referenciados desaparecen del binario.)
 
-namespace mole {}
+namespace mole {
+
+struct Stats {
+    uint32_t enqueued = 0;
+    uint32_t dropped = 0;
+    uint16_t dropped_by_kind[8] = {};
+    uint16_t ring_high_water = 0;
+    uint16_t sym_overflow = 0;
+    uint32_t tx_bytes = 0;
+};
+
+inline Stats stats() { return {}; }
+inline SymId intern(const char*, SymKind, SymId = 0) { return 0; }
+inline void logs(Level, const char*) {}
+inline void set_min_level(Level) {}
+inline void set_tag_level(SymId, Level) {}
+template <class... A>
+inline void watch(A&&...) {}
+template <class... A>
+inline void watchEvery(A&&...) {}
+inline void count(const char*, uint32_t = 1) {}
+inline void event(const char*, uint32_t = 0) {}
+
+}  // namespace mole
 
 #endif
