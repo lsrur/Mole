@@ -14,6 +14,7 @@ pub mod watch;
 pub use filter::{filter_indices, LogFilter, TextFilter};
 pub use pipeline::{render_log, Counts, Pipeline};
 pub use store::{LogStore, Retention, RowKind};
+pub use regex::Regex;
 pub use tick::{log_slice_raw, make_tick, query, TickState};
-pub use transport::{FileReplay, SerialTransport, Transport};
+pub use transport::{known_vid, list_ports, FileReplay, SerialTransport, Transport};
 pub use watch::{WatchStats, WatchStore};

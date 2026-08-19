@@ -3,6 +3,41 @@
 
 use std::io::{Read, Write};
 
+/// VID conocidos: Espressif nativo y puentes USB-serial habituales (DX-03).
+pub fn known_vid(vid: u16) -> Option<&'static str> {
+    match vid {
+        0x303A => Some("Espressif (USB nativo)"),
+        0x10C4 => Some("Silicon Labs CP210x"),
+        0x1A86 => Some("WCH CH340"),
+        0x0403 => Some("FTDI"),
+        _ => None,
+    }
+}
+
+/// Lista de puertos con metadata USB, lista para la UI (DX-03).
+pub fn list_ports() -> Vec<serde_json::Value> {
+    let Ok(ports) = serialport::available_ports() else {
+        return Vec::new();
+    };
+    ports
+        .into_iter()
+        .map(|p| {
+            let (vid, pid, tag) = match &p.port_type {
+                serialport::SerialPortType::UsbPort(u) => {
+                    (Some(u.vid), Some(u.pid), known_vid(u.vid))
+                }
+                _ => (None, None, None),
+            };
+            serde_json::json!({
+                "name": p.port_name,
+                "vid": vid,
+                "pid": pid,
+                "known": tag,
+            })
+        })
+        .collect()
+}
+
 pub trait Transport: Send {
     /// Lee lo que haya. Ok(0) = nada por ahora (no es EOF salvo `finished`).
     fn read_some(&mut self, buf: &mut [u8]) -> std::io::Result<usize>;

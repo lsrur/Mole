@@ -1,0 +1,120 @@
+/* Tokens de diseño — UI-46. El aspecto desktop es de acá, no de una
+   librería: densidad alta, bajo croma, bordes sin sombras, cero radios en
+   los paneles calientes, ninguna animación en ellos (UI-11). */
+
+:root {
+  /* tipografía: fuente de sistema; datos en mono */
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-data: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fs-ui: 12px;
+  --fs-data: 11px;
+
+  /* densidades de fila (UI-23) */
+  --row-compact: 18px;
+  --row-normal: 22px;
+  --row-comfy: 28px;
+
+  /* paleta oscura de bajo croma (UI-01) */
+  --bg-0: #16181d;      /* fondo app */
+  --bg-1: #1c1f26;      /* paneles */
+  --bg-2: #23272f;      /* chrome: toolbar, tabs, statusbar */
+  --bg-hover: #2a2f39;
+  --bg-selected: #2f3a4d;
+  --border: #30343d;
+  --text-0: #d5d8de;
+  --text-1: #9aa0ab;
+  --text-2: #6b7280;
+
+  /* acentos SOLO para estado (nivel de log, salud del enlace) */
+  --lvl-trace: #6b7280;
+  --lvl-debug: #7f8ea3;
+  --lvl-info: #7fb069;
+  --lvl-warn: #d9a54a;
+  --lvl-error: #d96c5f;
+  --lvl-fatal: #e04f5f;
+  --link-ok: #7fb069;
+  --link-warn: #d9a54a;
+  --link-bad: #d96c5f;
+
+  /* separación: bordes de 1 px, nada de sombras */
+  --radius-hot: 0;
+  --radius-cold: 3px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--fs-ui);
+  background: var(--bg-0);
+  color: var(--text-0);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* datos siempre en mono */
+.data,
+.log-row,
+.watch-value {
+  font-family: var(--font-data);
+  font-size: var(--fs-data);
+}
+
+/* chrome */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 8px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 24px;
+  padding: 0 8px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+  color: var(--text-1);
+  font-family: var(--font-data);
+  font-size: var(--fs-data);
+}
+
+/* controles fríos, mínimos */
+button,
+input,
+select {
+  font: inherit;
+  color: var(--text-0);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-cold);
+  padding: 3px 8px;
+}
+
+button:hover {
+  background: var(--bg-hover);
+}
+
+button:active {
+  background: var(--bg-selected);
+}
+
+/* cero transiciones en caliente; las frías, cortas */
+.cold {
+  transition: background 120ms ease;
+}

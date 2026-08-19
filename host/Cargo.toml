@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["mole-codec", "mole-fmt", "mole-vectors", "molectl", "mole-host"]
-exclude = ["fuzz"]
+exclude = ["fuzz", "mole-app"]
 
 [workspace.package]
 version = "0.1.0"

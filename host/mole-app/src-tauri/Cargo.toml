@@ -1,0 +1,20 @@
+[package]
+name = "mole-app"
+description = "Mole v2 — prototipado interactivo y debugging de firmware ESP32"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "mole_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+mole-host = { path = "../../mole-host" }
+mole-codec = { path = "../../mole-codec" }

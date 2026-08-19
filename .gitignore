@@ -8,3 +8,6 @@ __pycache__/
 /firmware/mole/examples/bench/dependencies.lock
 /firmware/mole/examples/bench/build_ctrl/
 /firmware/mole/examples/bench/managed_components/
+/host/mole-app/node_modules/
+/host/mole-app/dist/
+/host/mole-app/src-tauri/target/
