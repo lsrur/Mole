@@ -194,6 +194,127 @@ fn cmd_bench_decoder(frames: usize) -> ExitCode {
     }
 }
 
+/// F1-T12 (TEST-05): corre el banco. El firmware de examples/bench se
+/// auto-rampa y reporta por el propio enlace; acá se mide, se verifica la
+/// contabilidad (TEST-04) y se compara contra el baseline commiteado.
+fn cmd_bench(port_name: &str, baud: u32, baseline: Option<String>) -> ExitCode {
+    use mole_codec::frame::encode_frame;
+    use mole_codec::record::Record;
+    use mole_codec::types::TypeRegistry;
+
+    let port = serialport::new(port_name, baud)
+        .timeout(std::time::Duration::from_millis(50))
+        .open();
+    let mut port = match port {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("no pude abrir {port_name}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // CAT-09: HELLO de un host que no sabe nada → resync + REC_SESSION
+    let reg = TypeRegistry::new();
+    let hello = Record::CtlHello { proto_ver: 2, known_epoch: 0, known_catalog_hash: 0 }
+        .encode(0, &reg)
+        .unwrap();
+    let (_, wire) = encode_frame(0, 0, 0, &[hello]).unwrap();
+    let _ = std::io::Write::write_all(&mut port, &wire);
+
+    let mut p = Pipeline::new(usize::MAX);
+    let mut buf = [0u8; 4096];
+    let mut seen_lines = 0usize;
+    let mut steps: Vec<serde_json::Value> = Vec::new();
+    let mut costs: Vec<String> = Vec::new();
+    let mut burst: Option<String> = None;
+    let mut max_clean_rate = 0u64;
+    let mut prev_drop = 0u32;
+    let started = Instant::now();
+
+    loop {
+        match std::io::Read::read(&mut port, &mut buf) {
+            Ok(n) if n > 0 => p.feed(&buf[..n]),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(e) => {
+                eprintln!("lectura: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+        let mut done = false;
+        while seen_lines < p.rendered.len() {
+            let line = p.rendered[seen_lines].clone();
+            seen_lines += 1;
+            println!("{line}");
+            if line.contains("cost ") {
+                costs.push(line.clone());
+            }
+            if line.contains("burst done") {
+                burst = Some(line.clone());
+            }
+            if line.contains("step done") {
+                // "step done rate={} logs={} watches={} enq={} drop={} heap={}"
+                let num = |key: &str| -> u64 {
+                    line.split(&format!("{key}="))
+                        .nth(1)
+                        .and_then(|s| {
+                            s.split_whitespace().next().and_then(|v| v.parse().ok())
+                        })
+                        .unwrap_or(0)
+                };
+                let rate = num("rate");
+                let drop_now = p.counts.mcu_dropped;
+                let step_drops = drop_now.saturating_sub(prev_drop);
+                prev_drop = drop_now;
+                if step_drops == 0 && rate > max_clean_rate {
+                    max_clean_rate = rate;  // PERF-06: sostenido sin pérdida
+                }
+                steps.push(serde_json::json!({
+                    "rate": rate,
+                    "attempted": num("logs") + num("watches"),
+                    "drops_en_el_paso": step_drops,
+                }));
+            }
+            if line.contains("bench fin") {
+                done = true;
+            }
+        }
+        if done {
+            break;
+        }
+        if started.elapsed().as_secs() > 180 {
+            eprintln!("timeout esperando 'bench fin'");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    let summary = serde_json::json!({
+        "steps": steps,
+        "burst": burst,
+        "costs": costs,
+        "max_rate_sin_perdida": max_clean_rate,
+        "totales": p.summary_json(),
+        "test04_ok": p.counts.crc_errors == 0 && p.counts.seq_gaps == 0,
+    });
+    println!("{}", serde_json::to_string_pretty(&summary).unwrap());
+
+    // TEST-05: falla si degrada >10% contra el baseline commiteado
+    if let Some(path) = baseline {
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            if let Ok(base) = serde_json::from_str::<serde_json::Value>(&raw) {
+                let base_rate = base["max_rate_sin_perdida"].as_u64().unwrap_or(0);
+                if base_rate > 0 && (max_clean_rate as f64) < base_rate as f64 * 0.9 {
+                    eprintln!(
+                        "degradacion >10%: {max_clean_rate} vs baseline {base_rate}"
+                    );
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let render = arg_value(&args, "--render")
@@ -226,10 +347,18 @@ fn main() -> ExitCode {
                 .unwrap_or(5000usize);
             cmd_bench_decoder(frames)
         }
-        Some("bench") => {
-            eprintln!("bench necesita la placa (F1-T12); por ahora: bench-decoder");
-            ExitCode::FAILURE
-        }
+        Some("bench") => match args.get(1) {
+            Some(port) => {
+                let baud = arg_value(&args, "--baud")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(921_600);
+                cmd_bench(port, baud, arg_value(&args, "--baseline"))
+            }
+            None => {
+                eprintln!("uso: molectl bench <puerto> [--baud N] [--baseline ruta]");
+                ExitCode::FAILURE
+            }
+        },
         _ => {
             eprintln!("subcomandos: decode-file | watch | ports | bench-decoder");
             ExitCode::FAILURE
