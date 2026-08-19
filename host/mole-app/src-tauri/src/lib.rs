@@ -366,6 +366,33 @@ fn demo_start(state: AppState, rate: u32) -> Result<String, String> {
     Ok(format!("demo a {rate} rec/s"))
 }
 
+/// FEAT-07 / UI-07: desprender un panel a ventana propia. Veredicto del
+/// spike UI-08: el popout de dockview NO anda bajo Tauri (WKWebView bloquea
+/// window.open), así que la ventana desprendida es una ventana Tauri real
+/// que consume el mismo contrato de IPC (HOST-14) — a diferencia de v1,
+/// que mostraba datos mock.
+#[tauri::command]
+fn detach_panel(app: tauri::AppHandle, panel: String) -> Result<(), String> {
+    if !matches!(panel.as_str(), "watch" | "log") {
+        return Err(format!("panel desconocido: {panel}"));
+    }
+    let label = format!("panel-{panel}");
+    if let Some(w) = tauri::Manager::get_webview_window(&app, &label) {
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::App(format!("index.html?panel={panel}").into()),
+    )
+    .title(format!("Mole — {panel}"))
+    .inner_size(560.0, 640.0)
+    .build()
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 fn source_desc(state: AppState) -> String {
     state
@@ -389,6 +416,7 @@ pub fn run() {
             sym_names,
             set_tag_level,
             demo_start,
+            detach_panel,
             source_desc
         ])
         .setup(move |app| {

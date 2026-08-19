@@ -66,22 +66,20 @@ function resetLayout() {
   if (dockApi) defaultLayout(dockApi);
 }
 
-// SPIKE UI-08: ¿anda el popout de dockview bajo Tauri? El resultado se ve
-// en pantalla; si no abre ventana, el fallback es una ventana Tauri propia.
-async function popoutSpike() {
+// Veredicto del spike UI-08: el popout de dockview NO anda bajo Tauri
+// (WKWebView bloquea window.open). FEAT-07 usa el fallback: ventana Tauri
+// propia que consume el mismo contrato de IPC (HOST-14).
+async function detachWatch() {
   error.value = "";
   try {
-    const panel = dockApi?.getPanel("watch");
-    if (!panel) {
-      error.value = "no hay panel watch para desprender";
-      return;
-    }
-    const ok = await dockApi.addPopoutGroup(panel);
-    if (!ok) error.value = "popout: dockview devolvió false (ver consola)";
+    await invoke("detach_panel", { panel: "watch" });
   } catch (e) {
-    error.value = "popout: " + String(e);
+    error.value = "desprender: " + String(e);
   }
 }
+
+// ¿esta ventana ES un panel desprendido?
+const panelMode = new URLSearchParams(location.search).get("panel");
 const ports = ref([]);
 const selPort = ref("");
 const baud = ref(921600);
@@ -157,7 +155,17 @@ const linkClass = computed(() => {
 </script>
 
 <template>
-  <div class="shell">
+  <!-- ventana desprendida: solo el panel, mismo contrato IPC (HOST-14) -->
+  <div v-if="panelMode" class="shell">
+    <component :is="panelMode === 'watch' ? 'watch-panel' : 'log-panel'" class="center" />
+    <div class="statusbar">
+      <span>{{ panelMode }} — ventana desprendida</span>
+      <span class="grow"></span>
+      <span>tick #{{ tick?.seq ?? 0 }}</span>
+    </div>
+  </div>
+
+  <div v-else class="shell">
     <div class="toolbar">
       <strong>Mole</strong>
       <select v-model="selPort" class="cold">
@@ -173,7 +181,7 @@ const linkClass = computed(() => {
       <button class="cold" @click="openReplay">Replay</button>
       <button class="cold" title="fuente sintética a 50k rec/s (PERF-09)" @click="startDemo">Demo</button>
       <span class="sep"></span>
-      <button class="cold" title="spike UI-08: desprender el panel Watch a una ventana" @click="popoutSpike">
+      <button class="cold" title="desprender el panel Watch a una ventana propia (FEAT-07)" @click="detachWatch">
         Desprender Watch
       </button>
       <button class="cold" title="restaurar layout de fábrica" @click="resetLayout">Reset layout</button>
