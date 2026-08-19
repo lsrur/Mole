@@ -599,6 +599,25 @@ fn span_snapshot(state: AppState) -> Result<Vec<serde_json::Value>, String> {
         .collect())
 }
 
+/// "Limpiar" (UI-39): descarta logs/watches/spans acumulados conservando
+/// catálogo, comandos y estado vigente de FSM/LEDs. Vale para cualquier
+/// fuente; la que esté abierta sigue alimentando después.
+#[tauri::command]
+fn clear_data(state: AppState) -> Result<(), String> {
+    state
+        .pipeline
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clear_data();
+    // el TickState acumula "último total visto": sin esto, el tick que
+    // sigue reportaría deltas contra un total que ya no existe
+    let mut ts = state.tick.lock().map_err(|e| e.to_string())?;
+    let seq = ts.seq;
+    *ts = mole_host::tick::TickState::default();
+    ts.seq = seq;
+    Ok(())
+}
+
 /// Tabla interina de FEAT-24: estado vigente por máquina. La duración se
 /// mide contra el "ahora" del stream (last_t_us), no el reloj de la PC.
 #[tauri::command]
@@ -747,6 +766,7 @@ pub fn run() {
             detach_panel,
             span_snapshot,
             state_snapshot,
+            clear_data,
             command_list,
             send_command,
             source_desc

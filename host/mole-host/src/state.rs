@@ -40,6 +40,14 @@ impl StateStore {
     pub fn snapshot(&self) -> &[MachineState] {
         &self.machines
     }
+
+    /// "Limpiar" resetea lo acumulado; el estado vigente y su `since` quedan
+    /// (son información de ahora, como los LEDs — no se re-emiten solos).
+    pub fn reset_transitions(&mut self) {
+        for m in &mut self.machines {
+            m.transitions = 0;
+        }
+    }
 }
 
 /// Un LED de salud (FEAT-25). `level` según §7.8: OFF(0), VERDE(1),

@@ -68,6 +68,18 @@ impl Pipeline {
         }
     }
 
+    /// "Limpiar" (UI-39): descarta lo acumulado — logs, watches, spans,
+    /// transiciones — sin tocar el catálogo ni los comandos (las
+    /// definiciones no se re-emiten en vivo: borrarlas rompería el decode
+    /// del resto de la sesión) ni el estado vigente de FSM y LEDs.
+    pub fn clear_data(&mut self) {
+        self.logs = LogStore::new(Retention::default());
+        self.watches = WatchStore::new(crate::watch::DEFAULT_HISTORY);
+        self.spans = SpanStore::default();
+        self.states.reset_transitions();
+        self.rendered.clear();
+    }
+
     /// Alimenta bytes crudos del transporte. Procesa todo bloque terminado
     /// en 0x00; lo que quede sin delimitador espera más datos.
     pub fn feed(&mut self, data: &[u8]) {

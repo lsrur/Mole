@@ -141,6 +141,15 @@ async function closeSource() {
   await invoke("source_close");
 }
 
+// Clear disponible siempre que haya datos, con o sin fuente abierta
+const hasData = computed(
+  () => (tick.value?.logs?.total ?? 0) > 0 || (tick.value?.catalogSyms ?? 0) > 0,
+);
+
+async function clearData() {
+  await invoke("clear_data");
+}
+
 async function setReplayMode(mode) {
   await invoke("replay_mode", { mode });
 }
@@ -249,6 +258,8 @@ const linkClass = computed(() => {
         </template>
         <button class="cold" @click="closeSource">{{ t("close") }}</button>
       </template>
+
+      <button v-if="hasData" class="cold" @click="clearData">{{ t("clear") }}</button>
 
       <span class="grow"></span>
       <button class="cold" @click="detachWatch">{{ t("detachWatch") }}</button>
