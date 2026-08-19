@@ -2,6 +2,12 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Ventana principal: eventos (mole:tick) y APIs core",
-  "windows": ["main", "panel-*"],
-  "permissions": ["core:default"]
+  "windows": [
+    "main",
+    "panel-*"
+  ],
+  "permissions": [
+    "core:default",
+    "dialog:default"
+  ]
 }

@@ -3,6 +3,7 @@
 // firmware declaró, sin configuración en el desktop.
 import { inject, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "../i18n.js";
 
 defineProps(["params"]);
 
@@ -41,7 +42,7 @@ async function run(c) {
       argType: c.arg_type,
       value: c.arg_type === 0 ? null : Number(values.value[c.cmd_id]),
     });
-    status.value = `→ ${c.name} enviado`;
+    status.value = `→ ${c.name} ${t("sent")}`;
   } catch (e) {
     status.value = String(e);
   }
@@ -66,7 +67,7 @@ async function run(c) {
       </template>
     </div>
     <p v-if="cmds.length === 0" class="dim data">
-      sin comandos declarados por el firmware
+      {{ t("noCommands") }}
     </p>
     <p v-if="status" class="status data">{{ status }}</p>
   </div>

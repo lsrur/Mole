@@ -3,6 +3,7 @@
 // El flamegraph y la timeline en canvas llegan con F5 completo.
 import { inject, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "../i18n.js";
 
 defineProps(["params"]);
 
@@ -38,10 +39,10 @@ function us(v) {
     <table>
       <thead>
         <tr>
-          <th>span</th>
+          <th>{{ t("span") }}</th>
           <th class="num">n</th>
-          <th class="num">total</th>
-          <th class="num">media</th>
+          <th class="num">{{ t("total") }}</th>
+          <th class="num">{{ t("mean") }}</th>
           <th class="num">p50</th>
           <th class="num">p95</th>
           <th class="num">p99</th>
@@ -60,7 +61,7 @@ function us(v) {
           <td class="num hot">{{ us(r.max_us) }}</td>
         </tr>
         <tr v-if="rows.length === 0">
-          <td colspan="8" class="dim">sin spans todavía</td>
+          <td colspan="8" class="dim">{{ t("noSpans") }}</td>
         </tr>
       </tbody>
     </table>

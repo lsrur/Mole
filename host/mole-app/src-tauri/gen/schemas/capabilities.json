@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Ventana principal: eventos (mole:tick) y APIs core","local":true,"windows":["main","panel-*"],"permissions":["core:default"]}}
+{"default":{"identifier":"default","description":"Ventana principal: eventos (mole:tick) y APIs core","local":true,"windows":["main","panel-*"],"permissions":["core:default","dialog:default"]}}

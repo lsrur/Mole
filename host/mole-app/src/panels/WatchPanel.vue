@@ -3,6 +3,7 @@
 // del store (UI-27) y sparkline inline en canvas (FEAT-09).
 import { inject, onMounted, onUnmounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "../i18n.js";
 
 defineProps(["params"]);
 
@@ -58,12 +59,12 @@ function fmt(v) {
     <table>
       <thead>
         <tr>
-          <th>símbolo</th>
-          <th class="num">valor</th>
+          <th>{{ t("symbol") }}</th>
+          <th class="num">{{ t("value") }}</th>
           <th></th>
           <th class="num">min</th>
           <th class="num">max</th>
-          <th class="num">media</th>
+          <th class="num">{{ t("mean") }}</th>
           <th class="num">σ</th>
           <th class="num">n</th>
         </tr>
@@ -84,7 +85,7 @@ function fmt(v) {
           <td class="num">{{ r.n }}</td>
         </tr>
         <tr v-if="rows.length === 0">
-          <td colspan="8" class="dim">sin watches todavía</td>
+          <td colspan="8" class="dim">{{ t("noWatches") }}</td>
         </tr>
       </tbody>
     </table>

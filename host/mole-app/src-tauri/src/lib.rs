@@ -10,9 +10,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use mole_host::{FileReplay, LogFilter, Pipeline, SerialTransport, TextFilter, TickState,
-                Transport};
+use mole_host::{LogFilter, Pipeline, SerialTransport, TextFilter, TickState, Transport};
 use tauri::{Emitter, State};
+
+/// Estado de reproducción de un archivo (modo 1×/máx/paso).
+struct ReplayCtl {
+    pos: Arc<std::sync::atomic::AtomicUsize>,
+    total: usize,
+    mode: Arc<Mutex<String>>, // "realtime" | "max" | "step"
+    steps: Arc<std::sync::atomic::AtomicI64>,
+}
 
 struct Shared {
     pipeline: Mutex<Pipeline>,
@@ -22,6 +29,10 @@ struct Shared {
     /// cola de frames de downlink hacia el lector serial (PR-15)
     downlink_tx: Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>,
     source_desc: Mutex<String>,
+    /// none | live | file | demo — la UI se adapta a esto
+    source_kind: Mutex<String>,
+    paused: Arc<AtomicBool>,
+    replay: Mutex<Option<ReplayCtl>>,
 }
 
 impl Shared {
@@ -32,53 +43,163 @@ impl Shared {
             reader_stop: Mutex::new(Arc::new(AtomicBool::new(false))),
             downlink_tx: Mutex::new(None),
             source_desc: Mutex::new(String::new()),
+            source_kind: Mutex::new("none".into()),
+            paused: Arc::new(AtomicBool::new(false)),
+            replay: Mutex::new(None),
+        }
+    }
+
+    fn set_source(&self, kind: &str, desc: String) {
+        if let Ok(mut k) = self.source_kind.lock() {
+            *k = kind.into();
+        }
+        if let Ok(mut d) = self.source_desc.lock() {
+            *d = desc;
+        }
+        self.paused.store(false, Ordering::Relaxed);
+        if kind != "file" {
+            if let Ok(mut r) = self.replay.lock() {
+                *r = None;
+            }
         }
     }
 }
 
 type AppState<'a> = State<'a, Arc<Shared>>;
 
-fn spawn_reader(shared: &Arc<Shared>, mut transport: Box<dyn Transport>) {
+/// Reproducción de archivo con modos: "max" (todo de una), "realtime"
+/// (respeta los t_base_us de los frames, SES-03 a 1×) y "step" (frame a
+/// frame con replay_step).
+#[tauri::command]
+fn open_replay(state: AppState, path: String, mode: String) -> Result<String, String> {
+    let data = std::fs::read(&path).map_err(|e| e.to_string())?;
+    // separar frames (bloques terminados en 0x00) y extraer t_base_us
+    let mut frames: Vec<(Vec<u8>, u64)> = Vec::new();
+    let mut start = 0usize;
+    for i in 0..data.len() {
+        if data[i] == 0 {
+            let block = &data[start..=i];
+            start = i + 1;
+            if block.len() < 2 {
+                continue;
+            }
+            let t_base = mole_codec::cobs::decode(&block[..block.len() - 1])
+                .ok()
+                .filter(|pre| pre.len() >= 17)
+                .map(|pre| u64::from_le_bytes(pre[3..11].try_into().unwrap_or_default()))
+                .unwrap_or(0);
+            frames.push((block.to_vec(), t_base));
+        }
+    }
+    let total = frames.len();
+    if total == 0 {
+        return Err("el archivo no contiene frames".into());
+    }
+
+    let shared = state.inner().clone();
     let my_stop = Arc::new(AtomicBool::new(false));
     if let Ok(mut slot) = shared.reader_stop.lock() {
-        slot.store(true, Ordering::SeqCst); // matar al lector anterior
+        slot.store(true, Ordering::SeqCst);
         *slot = my_stop.clone();
     }
-    let shared = shared.clone();
+    let ctl = ReplayCtl {
+        pos: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        total,
+        mode: Arc::new(Mutex::new(mode.clone())),
+        steps: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+    };
+    let pos = ctl.pos.clone();
+    let mode_arc = ctl.mode.clone();
+    let steps = ctl.steps.clone();
+    shared.set_source("file", format!("{path} ({total} frames)"));
+    if let Ok(mut r) = shared.replay.lock() {
+        *r = Some(ctl);
+    }
+    let paused = shared.paused.clone();
     std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        loop {
+        let mut prev_t: Option<u64> = None;
+        for (i, (frame, t_base)) in frames.iter().enumerate() {
+            loop {
+                if my_stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                if paused.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(30));
+                    continue;
+                }
+                let mode_now = mode_arc
+                    .lock()
+                    .map(|m| m.clone())
+                    .unwrap_or_else(|_| "max".into());
+                match mode_now.as_str() {
+                    "step" => {
+                        if steps.fetch_sub(1, Ordering::Relaxed) > 0 {
+                            break; // consumir un paso
+                        }
+                        steps.fetch_add(1, Ordering::Relaxed); // devolver
+                        std::thread::sleep(Duration::from_millis(30));
+                    }
+                    "realtime" => {
+                        if let (Some(p), t) = (prev_t, *t_base) {
+                            if t > p {
+                                let dt = (t - p).min(1_000_000); // clamp 1 s
+                                std::thread::sleep(Duration::from_micros(dt));
+                            }
+                        }
+                        break;
+                    }
+                    _ => break, // max
+                }
+            }
             if my_stop.load(Ordering::Relaxed) {
                 return;
             }
-            match transport.read_some(&mut buf) {
-                Ok(0) => {
-                    if transport.finished() {
-                        return; // replay agotado: el store queda servible
-                    }
-                    std::thread::sleep(Duration::from_millis(2));
-                }
-                Ok(n) => {
-                    if let Ok(mut p) = shared.pipeline.lock() {
-                        p.feed(&buf[..n]);
-                    }
-                }
-                // el puerto desapareció (reset del MCU es flujo normal,
-                // TR-09); la reconexión con backoff llega en B-02
-                Err(_) => return,
+            if let Ok(mut p) = shared.pipeline.lock() {
+                p.feed(frame);
             }
+            prev_t = Some(*t_base);
+            pos.store(i + 1, Ordering::Relaxed);
         }
     });
+    Ok(format!("{path} ({total} frames)"))
 }
 
 #[tauri::command]
-fn open_replay(state: AppState, path: String) -> Result<String, String> {
-    let replay = FileReplay::open(&path).map_err(|e| e.to_string())?;
-    if let Ok(mut d) = state.source_desc.lock() {
-        *d = format!("replay: {path}");
+fn replay_mode(state: AppState, mode: String) -> Result<(), String> {
+    let guard = state.replay.lock().map_err(|e| e.to_string())?;
+    if let Some(r) = guard.as_ref() {
+        if let Ok(mut m) = r.mode.lock() {
+            *m = mode;
+        }
     }
-    spawn_reader(state.inner(), Box::new(replay));
-    Ok(format!("replay abierto: {path}"))
+    Ok(())
+}
+
+#[tauri::command]
+fn replay_step(state: AppState, n: i64) -> Result<(), String> {
+    let guard = state.replay.lock().map_err(|e| e.to_string())?;
+    if let Some(r) = guard.as_ref() {
+        r.steps.fetch_add(n.max(1), std::sync::atomic::Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+/// Pausar/reanudar la fuente actual (vivo, archivo o demo).
+#[tauri::command]
+fn source_pause(state: AppState, paused: bool) {
+    state.paused.store(paused, Ordering::Relaxed);
+}
+
+/// Cerrar la fuente: mata al lector y limpia el estado de conexión.
+#[tauri::command]
+fn source_close(state: AppState) {
+    if let Ok(slot) = state.reader_stop.lock() {
+        slot.store(true, Ordering::SeqCst);
+    }
+    if let Ok(mut tx) = state.downlink_tx.lock() {
+        *tx = None;
+    }
+    state.set_source("none", String::new());
 }
 
 #[tauri::command]
@@ -87,9 +208,7 @@ fn connect_serial(state: AppState, port: String, baud: u32) -> Result<String, St
     // solo con backoff 100 ms → 5 s (TR-09: el reset del MCU hace
     // desaparecer y reaparecer el device — es el flujo normal, no un error)
     let t = SerialTransport::open(&port, baud).map_err(|e| e.to_string())?;
-    if let Ok(mut d) = state.source_desc.lock() {
-        *d = format!("serial: {port} @{baud}");
-    }
+    state.set_source("live", format!("{port} @{baud}"));
     let shared = state.inner().clone();
     let my_stop = Arc::new(AtomicBool::new(false));
     if let Ok(mut slot) = shared.reader_stop.lock() {
@@ -109,6 +228,10 @@ fn connect_serial(state: AppState, port: String, baud: u32) -> Result<String, St
         loop {
             if my_stop.load(Ordering::Relaxed) {
                 return;
+            }
+            if shared.paused.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(30));
+                continue;
             }
             match transport.as_mut() {
                 Some(tr) => {
@@ -285,9 +408,7 @@ fn demo_start(state: AppState, rate: u32) -> Result<String, String> {
         slot.store(true, Ordering::SeqCst);
         *slot = my_stop.clone();
     }
-    if let Ok(mut d) = state.source_desc.lock() {
-        *d = format!("demo: {rate} rec/s sintéticos");
-    }
+    state.set_source("demo", format!("{rate} rec/s"));
     std::thread::spawn(move || {
         let reg = TypeRegistry::new();
         // catálogo del demo: tag + fmt, una sola vez
@@ -348,9 +469,14 @@ fn demo_start(state: AppState, rate: u32) -> Result<String, String> {
                 p.feed(&wire);
             }
         }
+        let paused = shared.paused.clone();
         loop {
             if my_stop.load(Ordering::Relaxed) {
                 return;
+            }
+            if paused.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(30));
+                continue;
             }
             // tanda de 20 ms
             let n = (rate / 50).max(1);
@@ -521,10 +647,27 @@ fn source_desc(state: AppState) -> String {
         .unwrap_or_default()
 }
 
+fn source_json(shared: &Arc<Shared>) -> serde_json::Value {
+    let kind = shared.source_kind.lock().map(|k| k.clone()).unwrap_or_default();
+    let desc = shared.source_desc.lock().map(|d| d.clone()).unwrap_or_default();
+    let paused = shared.paused.load(Ordering::Relaxed);
+    let replay = shared.replay.lock().ok().and_then(|g| {
+        g.as_ref().map(|r| {
+            serde_json::json!({
+                "pos": r.pos.load(std::sync::atomic::Ordering::Relaxed),
+                "total": r.total,
+                "mode": r.mode.lock().map(|m| m.clone()).unwrap_or_default(),
+            })
+        })
+    });
+    serde_json::json!({ "kind": kind, "desc": desc, "paused": paused, "replay": replay })
+}
+
 pub fn run() {
     let shared = Arc::new(Shared::new());
     let shared_for_tick = shared.clone();
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(shared)
         .invoke_handler(tauri::generate_handler![
             open_replay,
@@ -535,6 +678,10 @@ pub fn run() {
             sym_names,
             set_tag_level,
             demo_start,
+            replay_mode,
+            replay_step,
+            source_pause,
+            source_close,
             detach_panel,
             span_snapshot,
             command_list,
@@ -550,7 +697,7 @@ pub fn run() {
                     std::thread::sleep(Duration::from_millis(33));
                     let dt = last.elapsed().as_secs_f64();
                     last = Instant::now();
-                    let tick = {
+                    let mut tick = {
                         let Ok(mut p) = shared_for_tick.pipeline.lock() else {
                             continue;
                         };
@@ -559,6 +706,7 @@ pub fn run() {
                         };
                         mole_host::make_tick(&mut p, &mut ts, dt)
                     };
+                    tick["source"] = source_json(&shared_for_tick);
                     let _ = handle.emit("mole:tick", tick);
                 }
             });

@@ -1,15 +1,27 @@
 <script setup>
-// Shell de mole-app (F2-B01). El estado vive en Rust (ARQ-02): acá solo
-// llegan el tick de 30 Hz y las ventanas binarias que se piden.
+// Shell de mole-app. El estado vive en Rust (ARQ-02): acá solo llegan el
+// tick de 30 Hz y las ventanas binarias que se piden. La toolbar se adapta
+// al tipo de fuente: vivo (pausa/cerrar), archivo (1×/máx/paso), demo.
 import { computed, onMounted, onUnmounted, provide, ref, shallowRef, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { DockviewVue } from "dockview-vue";
+import { prefs, t } from "./i18n.js";
+import PrefsModal from "./modals/PrefsModal.vue";
+import PortModal from "./modals/PortModal.vue";
 
-const tick = shallowRef(null); // el último Tick entero; shallow a propósito
+const tick = shallowRef(null);
 const symNames = shallowRef({});
 provide("mole-tick", tick);
 provide("mole-syms", symNames);
+
+const error = ref("");
+const showPrefs = ref(false);
+const showPort = ref(false);
+
+// estado de fuente: viene DENTRO del tick (kind/desc/paused/replay)
+const source = computed(() => tick.value?.source ?? { kind: "none" });
 
 // refrescar nombres de símbolos cuando el catálogo crece
 watch(
@@ -21,7 +33,7 @@ watch(
   },
 );
 
-// ---- B-03: layout persistente + presets + spike de popout ----
+// ---- layout (dockview) ----
 let dockApi = null;
 let saveTimer = null;
 
@@ -35,8 +47,6 @@ function defaultLayout(api) {
     position: { referencePanel: "log", direction: "right" },
     initialWidth: 460,
   });
-  // todos visibles a la vez (preset "Sensor+Timing"); cualquier pestaña se
-  // arrastra a otro borde y el layout queda persistido
   api.addPanel({
     id: "spans",
     component: "spans-panel",
@@ -46,7 +56,7 @@ function defaultLayout(api) {
   api.addPanel({
     id: "cmds",
     component: "cmds-panel",
-    title: "Comandos",
+    title: t("commandsTitle"),
     position: { referencePanel: "spans", direction: "below" },
     initialHeight: 160,
   });
@@ -79,67 +89,29 @@ function onDockReady(event) {
 function resetLayout() {
   localStorage.removeItem("mole-layout");
   if (dockApi) defaultLayout(dockApi);
+  showPrefs.value = false;
 }
 
-// Veredicto del spike UI-08: el popout de dockview NO anda bajo Tauri
-// (WKWebView bloquea window.open). FEAT-07 usa el fallback: ventana Tauri
-// propia que consume el mismo contrato de IPC (HOST-14).
 async function detachWatch() {
   error.value = "";
   try {
     await invoke("detach_panel", { panel: "watch" });
   } catch (e) {
-    error.value = "desprender: " + String(e);
-  }
-}
-
-// ¿esta ventana ES un panel desprendido?
-const panelMode = new URLSearchParams(location.search).get("panel");
-const ports = ref([]);
-const selPort = ref("");
-const baud = ref(921600);
-const replayPath = ref("");
-const source = ref("sin fuente");
-const error = ref("");
-
-let unlisten = null;
-
-onMounted(async () => {
-  try {
-    unlisten = await listen("mole:tick", (e) => {
-      tick.value = e.payload;
-    });
-  } catch (e) {
-    // sin permiso de eventos (capabilities) esto fallaba en silencio
-    error.value = "listen(mole:tick): " + String(e);
-  }
-  await refreshPorts();
-});
-
-onUnmounted(() => unlisten && unlisten());
-
-async function refreshPorts() {
-  ports.value = await invoke("list_ports");
-  const known = ports.value.find((p) => p.known);
-  if (known && !selPort.value) selPort.value = known.name; // DX-03
-}
-
-async function connect() {
-  error.value = "";
-  try {
-    source.value = await invoke("connect_serial", {
-      port: selPort.value,
-      baud: Number(baud.value),
-    });
-  } catch (e) {
     error.value = String(e);
   }
 }
 
-async function openReplay() {
+// ---- fuentes ----
+
+async function openFile() {
   error.value = "";
   try {
-    source.value = await invoke("open_replay", { path: replayPath.value });
+    const path = await openDialog({
+      multiple: false,
+      title: t("openFile"),
+    });
+    if (!path) return;
+    await invoke("open_replay", { path, mode: "realtime" });
   } catch (e) {
     error.value = String(e);
   }
@@ -148,11 +120,43 @@ async function openReplay() {
 async function startDemo() {
   error.value = "";
   try {
-    source.value = await invoke("demo_start", { rate: 50000 });
+    await invoke("demo_start", { rate: 50000 });
   } catch (e) {
     error.value = String(e);
   }
 }
+
+async function togglePause() {
+  await invoke("source_pause", { paused: !source.value.paused });
+}
+
+async function closeSource() {
+  await invoke("source_close");
+}
+
+async function setReplayMode(mode) {
+  await invoke("replay_mode", { mode });
+}
+
+async function stepReplay(n) {
+  await invoke("replay_step", { n });
+}
+
+// ---- tick ----
+const panelMode = new URLSearchParams(location.search).get("panel");
+let unlisten = null;
+
+onMounted(async () => {
+  try {
+    unlisten = await listen("mole:tick", (e) => {
+      tick.value = e.payload;
+    });
+  } catch (e) {
+    error.value = "listen(mole:tick): " + String(e);
+  }
+});
+
+onUnmounted(() => unlisten && unlisten());
 
 function fmtRate(n) {
   if (n == null) return "—";
@@ -162,11 +166,17 @@ function fmtRate(n) {
 }
 
 const linkClass = computed(() => {
-  const t = tick.value;
-  if (!t) return "link-bad";
-  if (t.link.gaps > 0 || t.link.drops > 0) return "link-warn";
-  return t.link.recPerSec > 0 ? "link-ok" : "link-warn";
+  const tk = tick.value;
+  if (!tk || source.value.kind === "none") return "link-bad";
+  if (source.value.paused) return "link-warn";
+  if (tk.link.gaps > 0 || tk.link.drops > 0) return "link-warn";
+  return tk.link.recPerSec > 0 ? "link-ok" : "link-warn";
 });
+
+// dockview theme según preferencia
+const dockTheme = computed(() =>
+  prefs.theme === "light" ? "dockview-theme-light" : "dockview-theme-dark",
+);
 </script>
 
 <template>
@@ -177,7 +187,7 @@ const linkClass = computed(() => {
       class="center"
     />
     <div class="statusbar">
-      <span>{{ panelMode }} — ventana desprendida</span>
+      <span>{{ panelMode }} — {{ t("detached") }}</span>
       <span class="grow"></span>
       <span>tick #{{ tick?.seq ?? 0 }}</span>
     </div>
@@ -186,41 +196,76 @@ const linkClass = computed(() => {
   <div v-else class="shell">
     <div class="toolbar">
       <strong>Mole</strong>
-      <select v-model="selPort" class="cold">
-        <option v-for="p in ports" :key="p.name" :value="p.name">
-          {{ p.name }}{{ p.known ? " · " + p.known : "" }}
-        </option>
-      </select>
-      <input v-model="baud" size="8" title="baudrate (solo UART)" />
-      <button class="cold" @click="connect">Conectar</button>
-      <button class="cold" @click="refreshPorts">⟳</button>
-      <span class="sep"></span>
-      <input v-model="replayPath" placeholder="ruta a un stream crudo…" size="34" />
-      <button class="cold" @click="openReplay">Replay</button>
-      <button class="cold" title="fuente sintética a 50k rec/s (PERF-09)" @click="startDemo">Demo</button>
-      <span class="sep"></span>
-      <button class="cold" title="desprender el panel Watch a una ventana propia (FEAT-07)" @click="detachWatch">
-        Desprender Watch
-      </button>
-      <button class="cold" title="restaurar layout de fábrica" @click="resetLayout">Reset layout</button>
-      <span class="src">{{ source }}</span>
-      <span v-if="error" class="err">{{ error }}</span>
+
+      <!-- sin fuente: las tres formas de abrir -->
+      <template v-if="source.kind === 'none'">
+        <button class="cold" @click="showPort = true">{{ t("openPort") }}</button>
+        <button class="cold" @click="openFile">{{ t("openFile") }}</button>
+        <button class="cold" @click="startDemo">{{ t("demo") }}</button>
+      </template>
+
+      <!-- con fuente: controles según el tipo -->
+      <template v-else>
+        <span class="src data">{{ source.desc }}</span>
+        <button class="cold" @click="togglePause">
+          {{ source.paused ? t("resume") : t("pause") }}
+        </button>
+        <template v-if="source.kind === 'file' && source.replay">
+          <span class="seg">
+            <button
+              class="seg-btn"
+              :class="{ on: source.replay.mode === 'realtime' }"
+              @click="setReplayMode('realtime')"
+            >
+              1×
+            </button>
+            <button
+              class="seg-btn"
+              :class="{ on: source.replay.mode === 'max' }"
+              @click="setReplayMode('max')"
+            >
+              max
+            </button>
+            <button
+              class="seg-btn"
+              :class="{ on: source.replay.mode === 'step' }"
+              @click="setReplayMode('step')"
+            >
+              {{ t("step") }}
+            </button>
+          </span>
+          <template v-if="source.replay.mode === 'step'">
+            <button class="cold" @click="stepReplay(1)">{{ t("stepOne") }}</button>
+            <button class="cold" @click="stepReplay(10)">{{ t("stepTen") }}</button>
+          </template>
+          <span class="data dim">{{ source.replay.pos }}/{{ source.replay.total }}</span>
+        </template>
+        <button class="cold" @click="closeSource">{{ t("close") }}</button>
+      </template>
+
+      <span class="grow"></span>
+      <button class="cold" @click="detachWatch">{{ t("detachWatch") }}</button>
+      <button class="cold" :title="t('prefs')" @click="showPrefs = true">⚙</button>
+      <span v-if="error" class="err data">{{ error }}</span>
     </div>
 
     <div class="center">
-      <DockviewVue class="dockview-theme-dark dock" @ready="onDockReady" />
+      <DockviewVue :class="dockTheme" class="dock" @ready="onDockReady" />
     </div>
 
     <div class="statusbar">
       <span :class="linkClass">●</span>
       <span>{{ fmtRate(tick?.link.recPerSec) }} rec/s</span>
       <span>{{ fmtRate(tick?.link.bytesPerSec) }} B/s</span>
-      <span>drops MCU: {{ tick?.link.drops ?? "—" }}</span>
-      <span>huecos: {{ tick?.link.gaps ?? "—" }}</span>
-      <span>raw: {{ tick?.link.rawBytes ?? 0 }} B</span>
+      <span>{{ t("dropsMcu") }}: {{ tick?.link.drops ?? "—" }}</span>
+      <span>{{ t("gaps") }}: {{ tick?.link.gaps ?? "—" }}</span>
       <span class="grow"></span>
+      <span v-if="source.kind === 'none'" class="dim">{{ t("noSource") }}</span>
       <span>tick #{{ tick?.seq ?? 0 }}</span>
     </div>
+
+    <PrefsModal v-if="showPrefs" @close="showPrefs = false" @reset-layout="resetLayout" />
+    <PortModal v-if="showPort" @close="showPort = false" @connected="showPort = false" />
   </div>
 </template>
 
@@ -237,15 +282,12 @@ const linkClass = computed(() => {
 .dock {
   height: 100%;
 }
-.sep {
-  width: 1px;
-  height: 18px;
-  background: var(--border);
-  margin: 0 4px;
-}
 .src {
   color: var(--text-1);
-  margin-left: 8px;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .err {
   color: var(--lvl-error);
@@ -255,6 +297,28 @@ const linkClass = computed(() => {
 }
 .grow {
   flex: 1;
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-cold);
+  overflow: hidden;
+}
+.seg-btn {
+  border: none;
+  border-radius: 0;
+  padding: 2px 8px;
+  background: var(--bg-1);
+  color: var(--text-2);
+  font-family: var(--font-data);
+  font-size: var(--fs-data);
+}
+.seg-btn + .seg-btn {
+  border-left: 1px solid var(--border);
+}
+.seg-btn.on {
+  color: var(--text-0);
+  background: var(--bg-selected);
 }
 .link-ok {
   color: var(--link-ok);

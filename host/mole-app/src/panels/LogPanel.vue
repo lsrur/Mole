@@ -5,6 +5,7 @@
 import { computed, inject, onMounted, ref, shallowRef, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useVirtualizer } from "@tanstack/vue-virtual";
+import { t } from "../i18n.js";
 
 defineProps(["params"]); // dockview panel props
 
@@ -273,19 +274,19 @@ const newBehind = computed(() => {
           {{ t.name }}
         </button>
       </span>
-      <input v-model="textQ" class="text-q" placeholder="filtrar texto…" />
+      <input v-model="textQ" class="text-q" :placeholder="t('filterText')" />
       <label class="rx"><input type="checkbox" v-model="useRegex" /> .*</label>
       <select v-model="timeMode" class="tmode" title="modo de tiempo (UI-13)">
-        <option value="rel">t relativo</option>
-        <option value="abs">t absoluto</option>
-        <option value="dprev">Δ fila anterior</option>
-        <option value="dmark">Δ a la marca</option>
+        <option value="rel">{{ t("tRel") }}</option>
+        <option value="abs">{{ t("tAbs") }}</option>
+        <option value="dprev">{{ t("tDPrev") }}</option>
+        <option value="dmark">{{ t("tDMark") }}</option>
       </select>
       <span class="seg">
         <button class="seg-btn" :class="{ on: showTask }" @click="showTask = !showTask">task</button>
         <button class="seg-btn" :class="{ on: showCore }" @click="showCore = !showCore">core</button>
       </span>
-      <span class="count">{{ total }} filas</span>
+      <span class="count">{{ total }} {{ t("rows") }}</span>
     </div>
     <div ref="scrollEl" class="scroll" @wheel="onWheel">
       <div :style="{ height: virtualizer.getTotalSize() + 'px', position: 'relative' }">
@@ -333,7 +334,7 @@ const newBehind = computed(() => {
       </div>
     </div>
     <button v-if="!follow" class="pill cold" @click="resumeFollow">
-      ▼ {{ newBehind }} nuevas — volver al vivo
+      ▼ {{ newBehind }} {{ t("newBack") }}
     </button>
   </div>
 </template>
