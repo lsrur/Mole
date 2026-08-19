@@ -10,13 +10,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod pipeline;
-
 use std::io::Read;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use pipeline::Pipeline;
+use mole_host::Pipeline;
 
 fn arg_value(args: &[String], name: &str) -> Option<String> {
     args.iter()

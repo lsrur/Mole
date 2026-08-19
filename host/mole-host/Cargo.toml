@@ -1,6 +1,6 @@
 [package]
-name = "molectl"
-description = "El pipeline de Mole sin UI: decodificar, medir, capturar (ARQ-03)"
+name = "mole-host"
+description = "El pipeline del host de Mole: transporte, decoder, store, coalescer (HOST-01..14). Lo consumen molectl y mole-app."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,7 +10,6 @@ workspace = true
 
 [dependencies]
 mole-codec = { path = "../mole-codec" }
-mole-host = { path = "../mole-host" }
 mole-fmt = { path = "../mole-fmt" }
 serialport = "4"
 serde_json = "1"
