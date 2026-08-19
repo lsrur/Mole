@@ -1,0 +1,15 @@
+[package]
+name = "molectl"
+description = "El pipeline de Mole sin UI: decodificar, medir, capturar (ARQ-03)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mole-codec = { path = "../mole-codec" }
+mole-fmt = { path = "../mole-fmt" }
+serialport = "4"
+serde_json = "1"
