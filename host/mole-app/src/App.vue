@@ -35,19 +35,21 @@ function defaultLayout(api) {
     position: { referencePanel: "log", direction: "right" },
     initialWidth: 460,
   });
+  // todos visibles a la vez (preset "Sensor+Timing"); cualquier pestaña se
+  // arrastra a otro borde y el layout queda persistido
   api.addPanel({
     id: "spans",
     component: "spans-panel",
     title: "Spans",
-    position: { referencePanel: "watch", direction: "within" },
+    position: { referencePanel: "watch", direction: "below" },
   });
   api.addPanel({
     id: "cmds",
     component: "cmds-panel",
     title: "Comandos",
-    position: { referencePanel: "watch", direction: "within" },
+    position: { referencePanel: "spans", direction: "below" },
+    initialHeight: 160,
   });
-  api.getPanel("watch")?.api.setActive();
 }
 
 function onDockReady(event) {
