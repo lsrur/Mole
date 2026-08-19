@@ -173,8 +173,10 @@ const linkClass = computed(() => {
       <button class="cold" @click="openReplay">Replay</button>
       <button class="cold" title="fuente sintética a 50k rec/s (PERF-09)" @click="startDemo">Demo</button>
       <span class="sep"></span>
-      <button class="cold" title="spike UI-08: desprender Watch" @click="popoutSpike">⧉</button>
-      <button class="cold" title="restaurar layout de fábrica" @click="resetLayout">⌧</button>
+      <button class="cold" title="spike UI-08: desprender el panel Watch a una ventana" @click="popoutSpike">
+        Desprender Watch
+      </button>
+      <button class="cold" title="restaurar layout de fábrica" @click="resetLayout">Reset layout</button>
       <span class="src">{{ source }}</span>
       <span v-if="error" class="err">{{ error }}</span>
     </div>
