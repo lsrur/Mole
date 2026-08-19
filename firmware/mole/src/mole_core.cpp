@@ -60,6 +60,21 @@ struct Core {
     // decimación: contador por canal para descartar 1 de cada N bajo presión
     std::atomic<uint32_t> decim_seq[8];
 
+    // ---- watch rate limit (REC-09): último emit en ms por símbolo ----
+    std::atomic<uint32_t> watch_last_ms[MOLE_MAX_SYMBOLS + 1];
+
+    // ---- counters (REC-22..24): slots con delta atómico. La clave del
+    // camino caliente es el PUNTERO del literal: identidad sin intern, y por
+    // eso seguro desde ISR una vez registrado. ----
+    static constexpr size_t kMaxCounters = 32;
+    struct CounterSlot {
+        std::atomic<const char*> name{nullptr};
+        std::atomic<uint16_t> sym{0};
+        std::atomic<uint32_t> delta{0};
+    };
+    CounterSlot counters[kMaxCounters];
+    std::atomic<uint32_t> counter_lost_isr{0};
+
     // ---- log diferido (REC-34) y niveles (PR-19) ----
     std::atomic<uint16_t> fmt_next{1};
     std::atomic<uint8_t> min_level{0};
@@ -73,6 +88,7 @@ struct Core {
         for (auto& d : dropped_by_kind) d.store(0);
         for (auto& d : decim_seq) d.store(0);
         for (auto& t : tag_level) t.store(0);
+        for (auto& w : watch_last_ms) w.store(0);
     }
 };
 
@@ -169,6 +185,12 @@ void reset_for_tests() {
     c.hash_state = 0xFFFFFFFFu;
     for (auto& r : c.rings) r.reset();
     c.isr_ring.reset();
+    for (auto& s : c.counters) {
+        s.name.store(nullptr);
+        s.sym.store(0);
+        s.delta.store(0);
+    }
+    c.counter_lost_isr.store(0);
     for (auto& p : c.policies) p.store(static_cast<uint8_t>(Policy::DropNewest));
     c.enqueued.store(0);
     c.dropped.store(0);
@@ -475,6 +497,120 @@ bool meta_push_public(uint8_t type, const uint8_t* payload, uint8_t len) {
 }
 
 }  // namespace detail
+
+// ---------------------------------------------------------------------------
+// Watch / counters / eventos (F1-T06)
+// ---------------------------------------------------------------------------
+
+namespace detail {
+
+bool watch_emit(SymId sym, uint8_t wire, const void* bytes, uint8_t n) {
+    uint8_t payload[2 + 1 + 8];
+    put_u16(payload, sym);
+    payload[2] = wire;
+    std::memcpy(payload + 3, bytes, n);
+    return ring_push(REC_WATCH, payload, static_cast<uint8_t>(3 + n));
+}
+
+bool watch_emit_str(SymId sym, const char* s) {
+    uint8_t payload[255];
+    put_u16(payload, sym);
+    size_t n = s ? std::strlen(s) : 0;
+    if (n > 250) n = 250;
+    payload[2] = static_cast<uint8_t>(n);
+    std::memcpy(payload + 3, s, n);
+    return ring_push(REC_WATCH_STR, payload, static_cast<uint8_t>(3 + n));
+}
+
+bool watch_rate_ok(SymId sym, uint32_t every_ms) {
+    if (sym > MOLE_MAX_SYMBOLS) return false;
+    Core& c = core();
+    const uint32_t now_ms = static_cast<uint32_t>(port::now_us() / 1000);
+    const uint32_t last = c.watch_last_ms[sym].load(std::memory_order_relaxed);
+    if (last != 0 && now_ms - last < every_ms) return false;
+    // carrera benigna: dos hilos podrían pasar juntos una vez por ventana
+    c.watch_last_ms[sym].store(now_ms == 0 ? 1 : now_ms, std::memory_order_relaxed);
+    return true;
+}
+
+uint8_t counters_collect(uint8_t* payload) {
+    Core& c = core();
+    uint8_t n = 0;
+    uint8_t p = 1;  // payload[0] = n, al final
+    for (auto& slot : c.counters) {
+        const uint16_t sym = slot.sym.load(std::memory_order_relaxed);
+        if (sym == 0) continue;
+        const uint32_t delta = slot.delta.exchange(0, std::memory_order_relaxed);
+        if (delta == 0) continue;
+        put_u16(payload + p, sym);
+        put_u32(payload + p + 2, delta);
+        p = static_cast<uint8_t>(p + 6);
+        n++;
+        if (p + 6 > 255) break;
+    }
+    if (n == 0) return 0;
+    payload[0] = n;
+    return p;
+}
+
+uint32_t counter_lost_from_isr() {
+    return core().counter_lost_isr.load(std::memory_order_relaxed);
+}
+
+}  // namespace detail
+
+void count(const char* name, uint32_t n) {
+    Core& c = core();
+    // camino caliente: identidad de puntero sobre ≤32 slots, sin locks
+    for (auto& slot : c.counters) {
+        if (slot.name.load(std::memory_order_acquire) == name) {
+            slot.delta.fetch_add(n, std::memory_order_relaxed);
+            return;
+        }
+    }
+    if (port::in_isr()) {
+        // registrar exige intern (mutex): el contrato es primera llamada en
+        // contexto de tarea. Desde ISR, un contador desconocido se pierde
+        // CONTABILIZADO, nunca en silencio.
+        c.counter_lost_isr.fetch_add(n, std::memory_order_relaxed);
+        return;
+    }
+    // cold path: registrar (una vez por contador)
+    const SymId sym = intern(name, KIND_COUNTER);
+    if (sym == kSymOverflow) return;
+    for (auto& slot : c.counters) {
+        const char* expected = nullptr;
+        if (slot.name.compare_exchange_strong(expected, name,
+                                              std::memory_order_acq_rel)) {
+            slot.sym.store(sym, std::memory_order_relaxed);
+            slot.delta.fetch_add(n, std::memory_order_relaxed);
+            return;
+        }
+        // otro hilo pudo registrar el mismo literal
+        if (expected == name) {
+            slot.delta.fetch_add(n, std::memory_order_relaxed);
+            return;
+        }
+    }
+    // sin slots libres: pérdida contabilizada en el canal counter
+    detail::count_drop(c, detail::CH_COUNTER);
+}
+
+void event(const char* name, uint32_t arg) {
+    if (port::in_isr()) {
+        // FW-05 permite event() desde ISR, pero el nombre debe estar ya
+        // internado (el intern toma mutex). F1: registro previo en tarea o
+        // pérdida contabilizada. Se revisa con el uso real.
+        core().counter_lost_isr.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    const SymId sym = intern(name, static_cast<SymKind>(0));
+    if (sym == kSymOverflow) return;
+    uint8_t payload[6];
+    put_u16(payload, sym);
+    put_u32(payload + 2, arg);
+    detail::ring_push(REC_EVENT, payload, 6);
+}
 
 void set_min_level(Level lvl) {
     core().min_level.store(static_cast<uint8_t>(lvl), std::memory_order_relaxed);

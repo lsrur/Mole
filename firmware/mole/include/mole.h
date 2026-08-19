@@ -32,6 +32,58 @@ void logs(Level lvl, const char* msg);
 void set_min_level(Level lvl);
 void set_tag_level(SymId tag, Level lvl);
 
+namespace detail {
+// REC_WATCH {sym, type, value[]} ya empaquetado
+bool watch_emit(SymId sym, uint8_t wire, const void* bytes, uint8_t n);
+bool watch_emit_str(SymId sym, const char* s);
+// rate limit de watchEvery (REC-09): true si este sym puede emitir ahora
+bool watch_rate_ok(SymId sym, uint32_t every_ms);
+}  // namespace detail
+
+// Watch de variables (REC-06). El valor viaja auto-descripto.
+template <class T>
+inline void watch(const char* label, T value) {
+    const SymId s = intern(label, KIND_WATCH);
+    if (s == kSymOverflow) return;
+    if constexpr (detail::is_char_ptr_v<T> || detail::is_char_array_v<T>) {
+        detail::watch_emit_str(s, value);
+    } else {
+        static_assert(std::is_arithmetic_v<std::remove_cv_t<T>>,
+                      "MOLE: watch() acepta escalares o cadenas (REC-06)");
+        const uint8_t w = detail::scalar_wire<T>();
+        if constexpr (std::is_same_v<std::remove_cv_t<T>, bool>) {
+            const uint8_t b = value ? 1 : 0;
+            detail::watch_emit(s, w, &b, 1);
+        } else {
+            detail::watch_emit(s, w, &value, sizeof value);
+        }
+    }
+}
+
+// Watch con rate limit en el productor (REC-09): para loops de control de
+// alta frecuencia. El descarte por rate limit es deliberado: NO cuenta como
+// pérdida (FEAT-34 contabiliza lo involuntario).
+template <class T>
+inline void watchEvery(const char* label, T value, uint32_t ms) {
+    const SymId s = intern(label, KIND_WATCH);
+    if (s == kSymOverflow || !detail::watch_rate_ok(s, ms)) return;
+    if constexpr (std::is_same_v<std::remove_cv_t<T>, bool>) {
+        const uint8_t b = value ? 1 : 0;
+        detail::watch_emit(s, detail::scalar_wire<T>(), &b, 1);
+    } else {
+        detail::watch_emit(s, detail::scalar_wire<T>(), &value, sizeof value);
+    }
+}
+
+// Contador agregado en el MCU (REC-22..24). Seguro desde ISR una vez que el
+// contador existe: la PRIMERA llamada debe ocurrir en contexto de tarea
+// (registra el símbolo); desde ISR un contador desconocido se pierde
+// contabilizado.
+void count(const char* name, uint32_t n = 1);
+
+// Marca puntual con argumento (FEAT-23, §7.1). Legal desde ISR (FW-05).
+void event(const char* name, uint32_t arg = 0);
+
 // Estadísticas internas (PR-13). Snapshot consistente para tests y REC_STATS.
 struct Stats {
     uint32_t enqueued = 0;

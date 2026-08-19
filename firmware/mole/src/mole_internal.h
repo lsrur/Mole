@@ -102,5 +102,17 @@ struct RingStats {
 };
 RingStats ring_stats();
 
+// ---------------------------------------------------------------------------
+// Counters (REC-22..24): agregados en el MCU, batcheados por la moleTask
+// ---------------------------------------------------------------------------
+
+// Junta los deltas no-cero en un payload REC_COUNTER {n, entries} y los
+// resetea. Devuelve el largo (0 = nada para emitir). La llama la moleTask
+// cada 250 ms.
+uint8_t counters_collect(uint8_t* payload);
+
+// Incrementos perdidos por llamar count() desde ISR sin registro previo.
+uint32_t counter_lost_from_isr();
+
 }  // namespace detail
 }  // namespace mole

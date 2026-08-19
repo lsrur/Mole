@@ -572,6 +572,80 @@ static void test_descriptores() {
     CHECK(std::memcmp(buf + 8, "11ee2233", 8) == 0);
 }
 
+// ---------------------------------------------------------------------------
+// F1-T06: watch / watchEvery / count / event
+// ---------------------------------------------------------------------------
+
+static void test_watch_bytes_y_rate_limit() {
+    mole::detail::reset_for_tests();
+    mole::watch("Voltage", 1.5f);
+    uint8_t buf[255], type, len;
+    uint64_t t;
+    // primero drena el sym def de la cola meta... el watch va por el ring
+    CHECK(pop_ring0(&type, &t, buf, &len));
+    CHECK(type == mole::REC_WATCH);
+    CHECK(len == 7);
+    // type+value identicos al vector rec-watch (el sym depende del catalogo)
+    CHECK(hex(buf + 2, 5) == "090000c03f");
+
+    mole::watch("estado", "JOINED");
+    CHECK(pop_ring0(&type, &t, buf, &len));
+    CHECK(type == mole::REC_WATCH_STR);
+    CHECK(buf[2] == 6 && std::memcmp(buf + 3, "JOINED", 6) == 0);
+
+    // watchEvery: dentro de la ventana descarta EN EL PRODUCTOR y no cuenta
+    // como perdida (es rate limit deliberado, REC-09)
+    mole::testhooks::set_time_us(10'000'000);
+    mole::watchEvery("hf", 1, 50);
+    mole::watchEvery("hf", 2, 50);
+    mole::watchEvery("hf", 3, 50);
+    int emitted = 0;
+    while (pop_ring0(&type, &t, buf, &len)) emitted++;
+    CHECK(emitted == 1);
+    CHECK(mole::detail::ring_stats().dropped == 0);
+    mole::testhooks::advance_us(60'000);  // pasa la ventana de 50 ms
+    mole::watchEvery("hf", 4, 50);
+    CHECK(pop_ring0(&type, &t, buf, &len));
+}
+
+static void test_counters_agregados() {
+    mole::detail::reset_for_tests();
+    for (int i = 0; i < 100000; i++) mole::count("irq_rx");
+    mole::count("tx_done", 7);
+    uint8_t payload[255];
+    const uint8_t n = mole::detail::counters_collect(payload);
+    CHECK(n == 1 + 2 * 6);
+    CHECK(payload[0] == 2);
+    // deltas: 100000 y 7 (el orden es el de registro)
+    CHECK(mole::get_u32(payload + 3) == 100000);
+    CHECK(mole::get_u32(payload + 9) == 7);
+    // segunda recoleccion: nada (los deltas se resetean)
+    CHECK(mole::detail::counters_collect(payload) == 0);
+
+    // concurrencia: 4 hilos x 50k incrementos, suma exacta
+    std::vector<std::thread> ts;
+    for (int i = 0; i < 4; i++) {
+        ts.emplace_back([] {
+            for (int k = 0; k < 50000; k++) mole::count("irq_rx");
+        });
+    }
+    for (auto& th : ts) th.join();
+    const uint8_t n2 = mole::detail::counters_collect(payload);
+    CHECK(n2 != 0);
+    CHECK(mole::get_u32(payload + 3) == 200000);
+}
+
+static void test_event() {
+    mole::detail::reset_for_tests();
+    mole::event("sync", 42);
+    uint8_t buf[255], type, len;
+    uint64_t t;
+    CHECK(pop_ring0(&type, &t, buf, &len));
+    CHECK(type == mole::REC_EVENT);
+    CHECK(len == 6);
+    CHECK(mole::get_u32(buf + 2) == 42);
+}
+
 int main() {
     test_intern_secuencial_y_dedup();
     test_sym_def_bytes_contra_vector();
@@ -588,6 +662,9 @@ int main() {
     test_cadenas_literal_vs_runtime();
     test_logs_fallback();
     test_descriptores();
+    test_watch_bytes_y_rate_limit();
+    test_counters_agregados();
+    test_event();
     if (g_fails == 0) {
         std::puts("core_test: ok");
         return 0;
