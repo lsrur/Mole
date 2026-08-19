@@ -1,11 +1,37 @@
 <script setup>
 // Shell de mole-app (F2-B01). El estado vive en Rust (ARQ-02): acá solo
 // llegan el tick de 30 Hz y las ventanas binarias que se piden.
-import { computed, onMounted, onUnmounted, ref, shallowRef } from "vue";
+import { computed, onMounted, onUnmounted, provide, ref, shallowRef, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { DockviewVue } from "dockview-vue";
 
 const tick = shallowRef(null); // el último Tick entero; shallow a propósito
+const symNames = shallowRef({});
+provide("mole-tick", tick);
+provide("mole-syms", symNames);
+
+// refrescar nombres de símbolos cuando el catálogo crece
+watch(
+  () => tick.value?.catalogSyms,
+  async (n, prev) => {
+    if (n && n !== prev) {
+      symNames.value = await invoke("sym_names");
+    }
+  },
+);
+
+function onDockReady(event) {
+  const api = event.api;
+  api.addPanel({ id: "log", component: "log-panel", title: "Log" });
+  api.addPanel({
+    id: "watch",
+    component: "watch-panel",
+    title: "Watch",
+    position: { referencePanel: "log", direction: "right" },
+    initialWidth: 420,
+  });
+}
 const ports = ref([]);
 const selPort = ref("");
 const baud = ref(921600);
@@ -16,9 +42,14 @@ const error = ref("");
 let unlisten = null;
 
 onMounted(async () => {
-  unlisten = await listen("mole:tick", (e) => {
-    tick.value = e.payload;
-  });
+  try {
+    unlisten = await listen("mole:tick", (e) => {
+      tick.value = e.payload;
+    });
+  } catch (e) {
+    // sin permiso de eventos (capabilities) esto fallaba en silencio
+    error.value = "listen(mole:tick): " + String(e);
+  }
   await refreshPorts();
 });
 
@@ -85,18 +116,8 @@ const linkClass = computed(() => {
       <span v-if="error" class="err">{{ error }}</span>
     </div>
 
-    <div class="center data">
-      <template v-if="tick">
-        <p>
-          logs: <b>{{ tick.logs.total }}</b>
-          <span v-if="tick.logs.firstIndex > 0">
-            (datos desde t={{ tick.logs.dataSinceUs }} µs — hubo descarte)
-          </span>
-        </p>
-        <p>catálogo: {{ tick.catalogSyms }} símbolos · watches en el último tick: {{ tick.watches.length }}</p>
-        <p class="dim">los paneles Log y Watch llegan con B-03/B-04 (dockview + scroller)</p>
-      </template>
-      <p v-else class="dim">esperando el primer tick…</p>
+    <div class="center">
+      <DockviewVue class="dockview-theme-dark dock" @ready="onDockReady" />
     </div>
 
     <div class="statusbar">
@@ -120,8 +141,10 @@ const linkClass = computed(() => {
 }
 .center {
   flex: 1;
-  padding: 12px;
-  overflow: auto;
+  min-height: 0;
+}
+.dock {
+  height: 100%;
 }
 .sep {
   width: 1px;

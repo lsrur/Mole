@@ -144,6 +144,57 @@ fn log_query(
     Ok(tauri::ipc::Response::new(out))
 }
 
+/// Snapshot completo de watches (UI-27). Chico: decenas de filas.
+#[tauri::command]
+fn watch_snapshot(state: AppState) -> Result<Vec<serde_json::Value>, String> {
+    let p = state.pipeline.lock().map_err(|e| e.to_string())?;
+    let mut out: Vec<serde_json::Value> = p
+        .watches
+        .syms()
+        .filter_map(|sym| {
+            p.watches.get(sym).map(|s| {
+                let w = s.stats();
+                let name = p
+                    .catalog
+                    .sym(sym)
+                    .map(|e| String::from_utf8_lossy(&e.name).into_owned())
+                    .unwrap_or_else(|| format!("#{sym}"));
+                serde_json::json!({
+                    "id": sym,
+                    "name": name,
+                    "last": w.last,
+                    "min": w.min,
+                    "max": w.max,
+                    "mean": w.mean,
+                    "stddev": w.stddev,
+                    "n": w.n,
+                    "history": s.history().iter().rev().take(60).rev()
+                        .map(|(_, v)| v).collect::<Vec<_>>(),
+                })
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    Ok(out)
+}
+
+/// Nombres de símbolos para las columnas del log (tags, tareas).
+#[tauri::command]
+fn sym_names(state: AppState) -> Result<serde_json::Value, String> {
+    let p = state.pipeline.lock().map_err(|e| e.to_string())?;
+    let mut map = serde_json::Map::new();
+    for id in 1..=u16::MAX {
+        match p.catalog.sym(id) {
+            Some(s) => {
+                map.insert(id.to_string(),
+                           serde_json::json!(String::from_utf8_lossy(&s.name)));
+            }
+            None => break, // ids secuenciales (CAT-01): el primero ausente corta
+        }
+    }
+    Ok(serde_json::Value::Object(map))
+}
+
 #[tauri::command]
 fn source_desc(state: AppState) -> String {
     state
@@ -163,6 +214,8 @@ pub fn run() {
             connect_serial,
             list_ports,
             log_query,
+            watch_snapshot,
+            sym_names,
             source_desc
         ])
         .setup(move |app| {

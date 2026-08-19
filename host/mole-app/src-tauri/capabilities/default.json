@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Ventana principal: eventos (mole:tick) y APIs core",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
