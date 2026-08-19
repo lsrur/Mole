@@ -3,9 +3,16 @@
 //! Entrada no confiable: el camino de decodificación devuelve `Result`,
 //! nunca paniquea (SEC-04, C-3).
 
+pub mod args;
+pub mod catalog;
 pub mod cobs;
 pub mod crc32;
 pub mod error;
+pub mod frame;
+pub mod record;
+mod rw;
+pub mod types;
+pub mod wire;
 
 pub use error::DecodeError;
 
