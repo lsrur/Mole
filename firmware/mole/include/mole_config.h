@@ -11,11 +11,13 @@
 #endif
 
 // FW-12: MOLE_ENABLED=0 compila toda la instrumentación a nada.
-// Los bools de Kconfig están definidos (=1) o ausentes: bajo IDF, la
-// ausencia de CONFIG_MOLE_ENABLED significa "apagado por menuconfig";
-// fuera de IDF el default es encendido.
+// Los bools de Kconfig están definidos (=1) o ausentes. La ausencia de
+// CONFIG_MOLE_ENABLED solo significa "apagado por menuconfig" si NUESTRO
+// Kconfig corrió — lo que se detecta por los CONFIG_MOLE_* enteros, que
+// existen siempre que el componente se procesó. Bajo Arduino/PlatformIO
+// (sdkconfig preconstruido, sin nuestro Kconfig) el default es encendido.
 #ifndef MOLE_ENABLED
-#if defined(ESP_PLATFORM)
+#if defined(CONFIG_MOLE_RING_SIZE)
 #ifdef CONFIG_MOLE_ENABLED
 #define MOLE_ENABLED 1
 #else
