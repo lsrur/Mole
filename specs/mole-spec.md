@@ -1,6 +1,6 @@
 ---
 doc: mole-spec.md
-version: 2.0.0-draft.9
+version: 2.0.0-draft.10
 fecha: 2026-08-18
 estado: BORRADOR — para debate
 alcance: protocolo + librería de firmware + aplicación desktop
@@ -22,6 +22,7 @@ compatibilidad: NINGUNA con v1.x (ruptura deliberada y total)
 | 2.0.0-draft.7 | 2026-08-18 | Pasada de consistencia previa al congelamiento: §8.5 actualizada a las APIs de descriptor y formateo diferido; PERF-01 revisado a la baja y nuevos PERF-14/15; nota sobre numeración de FEAT. §6 y §7 quedan **congeladas**. Abiertos: PA-03, PA-06, PA-12. |
 | 2.0.0-draft.8 | 2026-08-18 | Correcciones de wire previas a F0, surgidas de la revisión del plan (mecanismo Q-5): `span_id` pasa a **contador global** de instancias con regla de stale en el host (REC-21); nuevo `flags: u8` por campo en `REC_TYPE_DEF`, bit 0 = big-endian — el MCU nunca invierte, el host invierte al decodificar (REC-43/REC-45, resuelve Q-2 del plan de F0); §7.10 reescrita: los checks usan **formateo diferido**, `REC_CHECK_FAIL` pasa a `{ fmt_id, task_id, core, args[] }`. Retoques editoriales: FEAT-05 (costo en régimen cero) y PLAT-04 (framework de UI remite a PA-12). §6 y §7 quedan **congeladas en este draft**. |
 | 2.0.0-draft.9 | 2026-08-18 | Huecos encontrados al calcular los vectores ancla (mecanismo Q-5, T-03): **PR-20** — todo `char[]` lleva prefijo de longitud `u8`, uniforme; `REC_SESSION` totalmente tipado (CAT-09); payload de `REC_STATE` definido (§7.8); **REC-52** — valores numéricos del enum de tipos de wire; números asignados a `SymKind` (CAT-03), niveles de status (§7.8), scopes de pausa (FW-20), políticas de backpressure (PR-12) y motivos de pausa/reanudación (FW-18, REC-20); `REC_RESUMED` gana `reason: u8` (FW-18 ya lo exigía); `REC_PAUSED` renombra `sym`→`file_sym`. §6 y §7 quedan **congeladas en este draft**. |
+| 2.0.0-draft.10 | 2026-08-18 | Última tanda de huecos mecánicos (Q-5, implementación del codec): opcodes de downlink asignados (0xC0–0xC9, PR-18); payload de `REC_SCHEMA_DEF` definido (REC-50); algoritmo de `catalog_hash` fijado como CRC32 incremental sobre payloads de definiciones (CAT-08); dimensionado de `min[]/max[]/step[]` en `REC_BIND_DEF`/`REC_CMD_DEF` (REC-10/REC-29), con `arg_type=0` = comando sin argumento. §6 y §7 quedan **congeladas en este draft**. |
 
 ## Convenciones del documento
 
@@ -272,7 +273,7 @@ Criterios de aceptación medibles. Cada uno tiene un test asociado en §15.
 
 ## 6. Framing y protocolo
 
-> **CONGELADO en draft.9.** Todo cambio a §6 o §7 a partir de acá requiere versión menor nueva y actualización de los vectores de TEST-01.
+> **CONGELADO en draft.10.** Todo cambio a §6 o §7 a partir de acá requiere versión menor nueva y actualización de los vectores de TEST-01.
 
 ### 6.1 Capas
 
@@ -366,7 +367,7 @@ El costo en régimen es un `load` de una variable estática. Para uso en templat
 
 **CAT-07** — Al arrancar, el firmware genera un `epoch: u32` (contador en RTC memory, o aleatorio si no está disponible). El `epoch` identifica unívocamente un arranque.
 
-**CAT-08** — El firmware mantiene un `catalog_hash: u32` incremental sobre todas las definiciones emitidas.
+**CAT-08** — El firmware mantiene un `catalog_hash: u32` incremental sobre todas las definiciones emitidas. Algoritmo: CRC32 (PR-03) acumulado sobre los **payloads** de cada `REC_SYM_DEF`, `REC_FMT_DEF`, `REC_TYPE_DEF` y `REC_SCHEMA_DEF`, concatenados en orden de emisión (el estado del CRC se arrastra de una definición a la siguiente).
 
 **CAT-09** — Handshake:
 
@@ -414,18 +415,20 @@ MCU → Desktop:  REC_SESSION { epoch: u32, catalog_hash: u32,
 
 **PR-18** — Records de downlink:
 
-| Tipo | Payload | Efecto |
-|---|---|---|
-| `CTL_HELLO` | ver §6.5 | Handshake / resync |
-| `CTL_CMD` | `{ cmd_id: u16, arg_type: u8, arg[] }` | Invoca comando registrado |
-| `CTL_BIND_SET` | `{ sym_id: u16, type: u8, value[] }` | Escribe variable ligada |
-| `CTL_PAUSE` | `{ scope: u8, task_id: u8 }` | Solicita pausa (§8.6) |
-| `CTL_RESUME` | `{ scope: u8, task_id: u8 }` | Reanuda |
-| `CTL_STEP` | `{ task_id: u8 }` | Reanuda hasta el próximo checkpoint |
-| `CTL_RESET` | `{ magic: u32 = 0x4D4F4C45 }` | Reinicia. **Requiere magic**, no un byte suelto. |
-| `CTL_SET_LEVEL` | `{ sym_id: u16, level: u8 }` | Nivel de log por tag, en vivo |
-| `CTL_SET_POLICY` | `{ kind: u8, policy: u8 }` | Cambia backpressure en vivo |
-| `CTL_PING` | `{ nonce: u32 }` | Mide RTT; responde `REC_PONG` |
+| Código | Tipo | Payload | Efecto |
+|---|---|---|---|
+| 0xC0 | `CTL_HELLO` | ver §6.5 | Handshake / resync |
+| 0xC1 | `CTL_CMD` | `{ cmd_id: u16, arg_type: u8, arg[] }` | Invoca comando registrado |
+| 0xC2 | `CTL_BIND_SET` | `{ sym_id: u16, type: u8, value[] }` | Escribe variable ligada |
+| 0xC3 | `CTL_PAUSE` | `{ scope: u8, task_id: u8 }` | Solicita pausa (§8.6) |
+| 0xC4 | `CTL_RESUME` | `{ scope: u8, task_id: u8 }` | Reanuda |
+| 0xC5 | `CTL_STEP` | `{ task_id: u8 }` | Reanuda hasta el próximo checkpoint |
+| 0xC6 | `CTL_RESET` | `{ magic: u32 = 0x4D4F4C45 }` | Reinicia. **Requiere magic**, no un byte suelto. |
+| 0xC7 | `CTL_SET_LEVEL` | `{ sym_id: u16, level: u8 }` | Nivel de log por tag, en vivo |
+| 0xC8 | `CTL_SET_POLICY` | `{ kind: u8, policy: u8 }` | Cambia backpressure en vivo |
+| 0xC9 | `CTL_PING` | `{ nonce: u32 }` | Mide RTT; responde `REC_PONG` |
+
+El argumento de `CTL_CMD`/`CTL_BIND_SET` se codifica según su tipo (REC-52); las cadenas, según PR-20.
 
 **PR-19** — `CTL_SET_LEVEL` permite silenciar un tag ruidoso **sin recompilar y sin gastar ancho de banda**: el filtro se aplica en el productor, antes de encolar. Es el mecanismo más efectivo para sostener PERF-06 en firmwares reales.
 
@@ -648,7 +651,7 @@ void setup() {
 }
 ```
 
-`REC_BIND_DEF`: `{ sym: u16, type: u8, flags: u8, min[], max[], step[] }`.
+`REC_BIND_DEF`: `{ sym: u16, type: u8, flags: u8, min[], max[], step[] }`. `min`/`max`/`step` miden cada uno el tamaño del tipo (REC-52) y están presentes solo para tipos numéricos; para `bool` el payload termina en `flags`.
 
 **REC-11** — La escritura desde el desktop (`CTL_BIND_SET`) se aplica en el punto seguro (§8.6), no desde el contexto de recepción. Para tipos ≤4 bytes con alineación natural la escritura es atómica; para tipos mayores DEBE usarse el mutex del bind o un callback.
 
@@ -699,6 +702,8 @@ tipo     := u8|i8|u16|i16|u32|i32|u64|i64|f32|f64|char   (sufijo "be" para big-e
 ```
 
 Ambos caminos convergen en el mismo `REC_TYPE_DEF`: el DSL se parsea en el host y produce la misma estructura que genera la macro. El renderizador es uno solo.
+
+`REC_SCHEMA_DEF`: `{ sym: u16, def: str }` — el texto del DSL viaja tal cual; el parseo es del host.
 
 **REC-51** — Bitfields (`u8 flags:3;`) se decodifican y muestran expandidos. Disponibles solo por el DSL: `offsetof` no alcanza para describir un bitfield de C++, y su layout no está garantizado por el estándar.
 
@@ -790,7 +795,7 @@ mole.command("Set channel", [](int ch) { radio.setChannel(ch); }, 0, 15);
 mole.command("Send text", [](const char* s) { radio.send(s); });
 ```
 
-`REC_CMD_DEF`: `{ cmd_id: u16, sym: u16, arg_type: u8, min[], max[] }`
+`REC_CMD_DEF`: `{ cmd_id: u16, sym: u16, arg_type: u8, min[], max[] }` — `arg_type = 0` significa comando sin argumento; `min`/`max` miden el tamaño del tipo y están presentes solo para tipos numéricos.
 
 **REC-30** — La UI se genera desde el firmware, sin configuración en el desktop. Argumento tipado ⇒ el desktop renderiza el control adecuado (botón, slider, campo numérico, dropdown, texto).
 
