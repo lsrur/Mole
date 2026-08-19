@@ -21,6 +21,51 @@ const LVL = ["TRC", "DBG", "INF", "WRN", "ERR", "FTL"];
 let fetching = false;
 let pendingRange = null;
 
+// ---- filtros siempre visibles (UI-14): se aplican al tipear ----
+const lvlOn = ref([true, true, true, true, true, true]);
+const selTags = ref([]); // multiselección de tags
+const textQ = ref("");
+const useRegex = ref(false);
+let debounceTimer = null;
+
+const tagOptions = computed(() =>
+  Object.entries(symNames.value)
+    .filter(([, v]) => v[1] === 2) // kind Tag (CAT-03)
+    .map(([id, v]) => ({ id: Number(id), name: v[0] })),
+);
+
+const filterSpec = computed(() => {
+  const spec = {};
+  const mask = lvlOn.value.reduce((m, on, i) => (on ? m | (1 << i) : m), 0);
+  if (mask !== 0x3f) spec.levelsMask = mask;
+  if (selTags.value.length > 0) spec.tags = selTags.value;
+  if (textQ.value) {
+    spec.text = textQ.value;
+    if (useRegex.value) spec.regex = true;
+  }
+  return spec;
+});
+
+// cambio de filtro: re-consultar desde el principio (o el final en follow)
+watch(filterSpec, () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    winRows.value = [];
+    winStart.value = 0;
+    fetchWindow(0, 120);
+  }, 120);
+});
+
+function toggleLvl(i) {
+  lvlOn.value = lvlOn.value.map((v, k) => (k === i ? !v : v));
+}
+
+function toggleTag(id) {
+  selTags.value = selTags.value.includes(id)
+    ? selTags.value.filter((t) => t !== id)
+    : [...selTags.value, id];
+}
+
 const virtualizer = useVirtualizer(
   computed(() => ({
     count: total.value,
@@ -61,7 +106,7 @@ async function fetchWindow(start, count) {
   fetching = true;
   try {
     const buf = await invoke("log_query", {
-      filter: {},
+      filter: filterSpec.value,
       offset: start,
       limit: Math.max(count, 100),
     });
@@ -93,21 +138,36 @@ watch(
   },
 );
 
-// el tick trae el total nuevo; en follow, ir al final (UI-19)
+// el tick trae logs nuevos; en follow, re-consultar la cola (UI-19).
+// Con filtro activo el total visible sale de la query, no del tick.
+let lastSeenIngest = 0;
 watch(
   () => tick.value,
   (t) => {
     if (!t) return;
-    const newTotal = Number(t.logs.total);
-    if (newTotal !== total.value) {
-      total.value = newTotal;
-      if (follow.value && newTotal > 0) {
-        virtualizer.value.scrollToIndex(newTotal - 1, { align: "end" });
-        fetchWindow(Math.max(0, newTotal - 120), 120);
+    const ingested = Number(t.logs.total);
+    if (ingested !== lastSeenIngest) {
+      lastSeenIngest = ingested;
+      if (follow.value) {
+        fetchTail();
       }
     }
   },
 );
+
+async function fetchTail() {
+  const buf = await invoke("log_query", {
+    filter: filterSpec.value,
+    offset: 0,
+    limit: 1, // solo para conocer el total filtrado
+  });
+  const { totalFiltered } = parseSlice(buf);
+  total.value = totalFiltered;
+  if (totalFiltered > 0) {
+    virtualizer.value.scrollToIndex(totalFiltered - 1, { align: "end" });
+    fetchWindow(Math.max(0, totalFiltered - 120), 120);
+  }
+}
 
 function onWheel(e) {
   if (e.deltaY < 0) follow.value = false; // congelar al scrollear arriba
@@ -132,7 +192,7 @@ function fmtT(t) {
 
 function tagName(tag) {
   if (!tag) return "";
-  return symNames.value[tag] ?? `#${tag}`;
+  return symNames.value[tag]?.[0] ?? `#${tag}`;
 }
 
 onMounted(() => fetchWindow(0, 120));
@@ -147,6 +207,34 @@ const newBehind = computed(() => {
 
 <template>
   <div class="log-panel">
+    <!-- UI-14: barra de filtros siempre visible, se aplica al tipear -->
+    <div class="filterbar">
+      <span class="seg">
+        <button
+          v-for="(name, i) in LVL"
+          :key="i"
+          class="seg-btn"
+          :class="{ on: lvlOn[i], ['lvl' + i]: lvlOn[i] }"
+          @click="toggleLvl(i)"
+        >
+          {{ name }}
+        </button>
+      </span>
+      <span class="seg" v-if="tagOptions.length">
+        <button
+          v-for="t in tagOptions"
+          :key="t.id"
+          class="seg-btn"
+          :class="{ on: selTags.includes(t.id) || selTags.length === 0 }"
+          @click="toggleTag(t.id)"
+        >
+          {{ t.name }}
+        </button>
+      </span>
+      <input v-model="textQ" class="text-q" placeholder="filtrar texto…" />
+      <label class="rx"><input type="checkbox" v-model="useRegex" /> .*</label>
+      <span class="count">{{ total }} filas</span>
+    </div>
     <div ref="scrollEl" class="scroll" @wheel="onWheel">
       <div :style="{ height: virtualizer.getTotalSize() + 'px', position: 'relative' }">
         <div
@@ -188,10 +276,57 @@ const newBehind = computed(() => {
 .log-panel {
   position: relative;
   height: 100%;
+  display: flex;
+  flex-direction: column;
   background: var(--bg-1);
 }
+.filterbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+  flex-wrap: wrap;
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-cold);
+  overflow: hidden;
+}
+.seg-btn {
+  border: none;
+  border-radius: 0;
+  padding: 2px 7px;
+  background: var(--bg-1);
+  color: var(--text-2);
+  font-family: var(--font-data);
+  font-size: var(--fs-data);
+}
+.seg-btn + .seg-btn {
+  border-left: 1px solid var(--border);
+}
+.seg-btn.on {
+  color: var(--text-0);
+  background: var(--bg-selected);
+}
+.text-q {
+  min-width: 160px;
+  flex: 1;
+}
+.rx {
+  color: var(--text-1);
+  font-family: var(--font-data);
+}
+.count {
+  color: var(--text-2);
+  font-family: var(--font-data);
+  font-size: var(--fs-data);
+}
 .scroll {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   contain: strict;
 }

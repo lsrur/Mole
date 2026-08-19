@@ -80,11 +80,50 @@ fn open_replay(state: AppState, path: String) -> Result<String, String> {
 
 #[tauri::command]
 fn connect_serial(state: AppState, port: String, baud: u32) -> Result<String, String> {
+    // la primera apertura valida el puerto; después el lector se reconecta
+    // solo con backoff 100 ms → 5 s (TR-09: el reset del MCU hace
+    // desaparecer y reaparecer el device — es el flujo normal, no un error)
     let t = SerialTransport::open(&port, baud).map_err(|e| e.to_string())?;
     if let Ok(mut d) = state.source_desc.lock() {
         *d = format!("serial: {port} @{baud}");
     }
-    spawn_reader(state.inner(), Box::new(t));
+    let shared = state.inner().clone();
+    let my_stop = Arc::new(AtomicBool::new(false));
+    if let Ok(mut slot) = shared.reader_stop.lock() {
+        slot.store(true, Ordering::SeqCst);
+        *slot = my_stop.clone();
+    }
+    let port_owned = port.clone();
+    std::thread::spawn(move || {
+        let port = port_owned;
+        let mut transport: Option<Box<dyn Transport>> = Some(Box::new(t));
+        let mut backoff_ms = 100u64;
+        let mut buf = [0u8; 8192];
+        loop {
+            if my_stop.load(Ordering::Relaxed) {
+                return;
+            }
+            match transport.as_mut() {
+                Some(tr) => match tr.read_some(&mut buf) {
+                    Ok(0) => std::thread::sleep(Duration::from_millis(2)),
+                    Ok(n) => {
+                        backoff_ms = 100;
+                        if let Ok(mut p) = shared.pipeline.lock() {
+                            p.feed(&buf[..n]);
+                        }
+                    }
+                    Err(_) => transport = None, // el puerto desapareció
+                },
+                None => {
+                    std::thread::sleep(Duration::from_millis(backoff_ms));
+                    backoff_ms = (backoff_ms * 2).min(5000);
+                    if let Ok(t) = SerialTransport::open(&port, baud) {
+                        transport = Some(Box::new(t));
+                    }
+                }
+            }
+        }
+    });
     Ok(format!("conectado a {port}"))
 }
 
@@ -178,7 +217,8 @@ fn watch_snapshot(state: AppState) -> Result<Vec<serde_json::Value>, String> {
     Ok(out)
 }
 
-/// Nombres de símbolos para las columnas del log (tags, tareas).
+/// Nombres y kinds de símbolos: `{id: [nombre, kind]}`. El kind permite a
+/// la UI poblar la multiselección de tags (CAT-03: Tag=2).
 #[tauri::command]
 fn sym_names(state: AppState) -> Result<serde_json::Value, String> {
     let p = state.pipeline.lock().map_err(|e| e.to_string())?;
@@ -186,8 +226,10 @@ fn sym_names(state: AppState) -> Result<serde_json::Value, String> {
     for id in 1..=u16::MAX {
         match p.catalog.sym(id) {
             Some(s) => {
-                map.insert(id.to_string(),
-                           serde_json::json!(String::from_utf8_lossy(&s.name)));
+                map.insert(
+                    id.to_string(),
+                    serde_json::json!([String::from_utf8_lossy(&s.name), s.kind]),
+                );
             }
             None => break, // ids secuenciales (CAT-01): el primero ausente corta
         }
