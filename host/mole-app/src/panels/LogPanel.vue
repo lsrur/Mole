@@ -185,9 +185,40 @@ function rowAt(index) {
   return rel >= 0 && rel < winRows.value.length ? winRows.value[rel] : null;
 }
 
-function fmtT(t) {
-  if (t0.value === null) return "";
-  return ((t - t0.value) / 1e6).toFixed(6);
+// UI-13: modos de tiempo conmutables en caliente. El delta con la fila
+// anterior es el que convierte el log en instrumento de medición.
+const timeMode = ref("rel"); // 'abs' | 'rel' | 'dprev' | 'dmark'
+const markIdx = ref(null); // fila marcada como origen (UI-18)
+const showTask = ref(false);
+const showCore = ref(false);
+
+function fmtT(t, index) {
+  switch (timeMode.value) {
+    case "abs": {
+      // µs del MCU tal cual (PR-10): correlacionar con eventos externos
+      return (t / 1e6).toFixed(6);
+    }
+    case "dprev": {
+      const prev = rowAt(index - 1);
+      if (!prev) return "";
+      const d = t - prev.t;
+      return (d >= 0 ? "+" : "") + (d / 1000).toFixed(3) + "ms";
+    }
+    case "dmark": {
+      if (markIdx.value === null) return "sin marca";
+      const mark = rowAt(markIdx.value);
+      if (!mark) return "…";
+      return ((t - mark.t) / 1000).toFixed(3) + "ms";
+    }
+    default: {
+      if (t0.value === null) return "";
+      return ((t - t0.value) / 1e6).toFixed(6);
+    }
+  }
+}
+
+function toggleMark(index) {
+  markIdx.value = markIdx.value === index ? null : index;
 }
 
 function tagName(tag) {
@@ -233,6 +264,16 @@ const newBehind = computed(() => {
       </span>
       <input v-model="textQ" class="text-q" placeholder="filtrar texto…" />
       <label class="rx"><input type="checkbox" v-model="useRegex" /> .*</label>
+      <select v-model="timeMode" class="tmode" title="modo de tiempo (UI-13)">
+        <option value="rel">t relativo</option>
+        <option value="abs">t absoluto</option>
+        <option value="dprev">Δ fila anterior</option>
+        <option value="dmark">Δ a la marca</option>
+      </select>
+      <span class="seg">
+        <button class="seg-btn" :class="{ on: showTask }" @click="showTask = !showTask">task</button>
+        <button class="seg-btn" :class="{ on: showCore }" @click="showCore = !showCore">core</button>
+      </span>
       <span class="count">{{ total }} filas</span>
     </div>
     <div ref="scrollEl" class="scroll" @wheel="onWheel">
@@ -253,10 +294,19 @@ const newBehind = computed(() => {
         >
           <template v-if="rowAt(item.index)">
             <template v-if="rowAt(item.index).kind === 0">
-              <span class="col-t">{{ fmtT(rowAt(item.index).t) }}</span>
+              <span
+                class="col-mark"
+                :class="{ marked: markIdx === item.index }"
+                title="marcar como origen del delta (UI-18)"
+                @click="toggleMark(item.index)"
+                >{{ markIdx === item.index ? "◆" : "◇" }}</span
+              >
+              <span class="col-t">{{ fmtT(rowAt(item.index).t, item.index) }}</span>
               <span class="col-lvl" :class="'lvl' + rowAt(item.index).level">{{
                 LVL[rowAt(item.index).level] ?? "?"
               }}</span>
+              <span v-if="showTask" class="col-tc">t{{ rowAt(item.index).task }}</span>
+              <span v-if="showCore" class="col-tc">c{{ rowAt(item.index).core }}</span>
               <span class="col-tag">{{ tagName(rowAt(item.index).tag) }}</span>
               <span class="col-msg">{{ rowAt(item.index).text }}</span>
             </template>
@@ -338,10 +388,26 @@ const newBehind = computed(() => {
   white-space: nowrap;
   line-height: 22px;
 }
+.col-mark {
+  color: var(--text-2);
+  cursor: pointer;
+  width: 14px;
+}
+.col-mark.marked {
+  color: var(--lvl-warn);
+}
 .col-t {
   color: var(--text-2);
   min-width: 92px;
   text-align: right;
+}
+.col-tc {
+  color: var(--text-2);
+  min-width: 22px;
+}
+.tmode {
+  font-family: var(--font-data);
+  font-size: var(--fs-data);
 }
 .col-lvl {
   min-width: 28px;

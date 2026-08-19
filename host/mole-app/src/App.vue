@@ -21,8 +21,12 @@ watch(
   },
 );
 
-function onDockReady(event) {
-  const api = event.api;
+// ---- B-03: layout persistente + presets + spike de popout ----
+let dockApi = null;
+let saveTimer = null;
+
+function defaultLayout(api) {
+  api.clear();
   api.addPanel({ id: "log", component: "log-panel", title: "Log" });
   api.addPanel({
     id: "watch",
@@ -31,6 +35,52 @@ function onDockReady(event) {
     position: { referencePanel: "log", direction: "right" },
     initialWidth: 420,
   });
+}
+
+function onDockReady(event) {
+  dockApi = event.api;
+  const saved = localStorage.getItem("mole-layout");
+  if (saved) {
+    try {
+      dockApi.fromJSON(JSON.parse(saved));
+    } catch {
+      defaultLayout(dockApi);
+    }
+  } else {
+    defaultLayout(dockApi);
+  }
+  dockApi.onDidLayoutChange(() => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try {
+        localStorage.setItem("mole-layout", JSON.stringify(dockApi.toJSON()));
+      } catch {
+        /* sin persistencia no se rompe nada */
+      }
+    }, 400);
+  });
+}
+
+function resetLayout() {
+  localStorage.removeItem("mole-layout");
+  if (dockApi) defaultLayout(dockApi);
+}
+
+// SPIKE UI-08: ¿anda el popout de dockview bajo Tauri? El resultado se ve
+// en pantalla; si no abre ventana, el fallback es una ventana Tauri propia.
+async function popoutSpike() {
+  error.value = "";
+  try {
+    const panel = dockApi?.getPanel("watch");
+    if (!panel) {
+      error.value = "no hay panel watch para desprender";
+      return;
+    }
+    const ok = await dockApi.addPopoutGroup(panel);
+    if (!ok) error.value = "popout: dockview devolvió false (ver consola)";
+  } catch (e) {
+    error.value = "popout: " + String(e);
+  }
 }
 const ports = ref([]);
 const selPort = ref("");
@@ -112,6 +162,9 @@ const linkClass = computed(() => {
       <span class="sep"></span>
       <input v-model="replayPath" placeholder="ruta a un stream crudo…" size="34" />
       <button class="cold" @click="openReplay">Replay</button>
+      <span class="sep"></span>
+      <button class="cold" title="spike UI-08: desprender Watch" @click="popoutSpike">⧉</button>
+      <button class="cold" title="restaurar layout de fábrica" @click="resetLayout">⌧</button>
       <span class="src">{{ source }}</span>
       <span v-if="error" class="err">{{ error }}</span>
     </div>
