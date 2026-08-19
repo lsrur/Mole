@@ -52,6 +52,15 @@ function fmt(v) {
   if (Number.isInteger(v)) return String(v);
   return Math.abs(v) >= 1000 ? v.toFixed(1) : v.toPrecision(4);
 }
+
+// click en la fila: ventana emergente con el historial (FEAT-09)
+async function openHistory(sym) {
+  try {
+    await invoke("open_watch_history", { sym });
+  } catch {
+    /* sin ventana no se rompe nada */
+  }
+}
 </script>
 
 <template>
@@ -70,7 +79,13 @@ function fmt(v) {
         </tr>
       </thead>
       <tbody>
-        <tr v-for="r in rows" :key="r.id">
+        <tr
+          v-for="r in rows"
+          :key="r.id"
+          class="row"
+          :title="t('history')"
+          @click="openHistory(r.id)"
+        >
           <td class="name">{{ r.name }}</td>
           <td class="num watch-value">{{ fmt(r.last) }}</td>
           <td>
@@ -121,6 +136,12 @@ td {
 }
 .name {
   color: var(--text-0);
+}
+.row {
+  cursor: pointer;
+}
+.row:hover td {
+  background: var(--bg-hover);
 }
 .spark path {
   fill: none;

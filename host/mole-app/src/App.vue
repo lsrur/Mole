@@ -209,7 +209,7 @@ const linkClass = computed(() => {
   <!-- ventana desprendida: solo el panel, mismo contrato IPC (HOST-14) -->
   <div v-if="panelMode" class="shell">
     <component
-      :is="{ watch: 'watch-panel', spans: 'spans-panel', states: 'states-panel', cmds: 'cmds-panel' }[panelMode] ?? 'log-panel'"
+      :is="{ watch: 'watch-panel', spans: 'spans-panel', states: 'states-panel', cmds: 'cmds-panel', hist: 'hist-panel' }[panelMode] ?? 'log-panel'"
       class="center"
     />
     <div class="statusbar">

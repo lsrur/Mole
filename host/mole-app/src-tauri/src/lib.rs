@@ -35,6 +35,10 @@ struct Shared {
     source_kind: Mutex<String>,
     paused: Arc<AtomicBool>,
     replay: Mutex<Option<ReplayCtl>>,
+    /// ancla (t_us del stream, ms de reloj de pared) fijada en el primer
+    /// tick con datos de cada fuente: la UI deriva fecha/hora estable de
+    /// los t del stream sin que tiemble entre refrescos
+    t_anchor: Mutex<Option<(u64, u64)>>,
 }
 
 impl Shared {
@@ -48,6 +52,7 @@ impl Shared {
             source_kind: Mutex::new("none".into()),
             paused: Arc::new(AtomicBool::new(false)),
             replay: Mutex::new(None),
+            t_anchor: Mutex::new(None),
         }
     }
 
@@ -59,6 +64,9 @@ impl Shared {
             *d = desc;
         }
         self.paused.store(false, Ordering::Relaxed);
+        if let Ok(mut a) = self.t_anchor.lock() {
+            *a = None;
+        }
         if kind != "file" {
             if let Ok(mut r) = self.replay.lock() {
                 *r = None;
@@ -381,6 +389,58 @@ fn watch_snapshot(state: AppState) -> Result<Vec<serde_json::Value>, String> {
         .collect();
     out.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     Ok(out)
+}
+
+/// Historial de un watch para su ventana emergente (FEAT-09): puntos
+/// (t_us, valor) más el ancla stream→pared para derivar fecha/hora.
+#[tauri::command]
+fn watch_history(state: AppState, sym: u16, limit: usize) -> Result<serde_json::Value, String> {
+    let p = state.pipeline.lock().map_err(|e| e.to_string())?;
+    let s = p.watches.get(sym).ok_or("watch desconocido")?;
+    let name = p
+        .catalog
+        .sym(sym)
+        .map(|e| String::from_utf8_lossy(&e.name).into_owned())
+        .unwrap_or_else(|| format!("#{sym}"));
+    let hist = s.history();
+    let from = hist.len().saturating_sub(limit.max(1));
+    let points: Vec<serde_json::Value> =
+        hist[from..].iter().map(|(t, v)| serde_json::json!([t, v])).collect();
+    let anchor = state.t_anchor.lock().ok().and_then(|a| *a);
+    Ok(serde_json::json!({
+        "name": name,
+        "total": s.stats().n,
+        "points": points,
+        "anchor": anchor.map(|(t, w)| serde_json::json!({ "tUs": t, "wallMs": w })),
+    }))
+}
+
+/// Abre (o enfoca) la ventana emergente de historial de un watch. No es
+/// modal: una ventana Tauri más, cliente del mismo IPC (HOST-14).
+#[tauri::command]
+fn open_watch_history(app: tauri::AppHandle, state: AppState, sym: u16) -> Result<(), String> {
+    let name = {
+        let p = state.pipeline.lock().map_err(|e| e.to_string())?;
+        p.catalog
+            .sym(sym)
+            .map(|e| String::from_utf8_lossy(&e.name).into_owned())
+            .unwrap_or_else(|| format!("#{sym}"))
+    };
+    let label = format!("panel-hist-{sym}");
+    if let Some(w) = tauri::Manager::get_webview_window(&app, &label) {
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::App(format!("index.html?panel=hist&sym={sym}").into()),
+    )
+    .title(format!("Mole — {name}"))
+    .inner_size(560.0, 620.0)
+    .build()
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Nombres y kinds de símbolos: `{id: [nombre, kind]}`. El kind permite a
@@ -798,6 +858,8 @@ pub fn run() {
             state_snapshot,
             clear_data,
             replay_rewind,
+            watch_history,
+            open_watch_history,
             command_list,
             send_command,
             source_desc
@@ -818,7 +880,20 @@ pub fn run() {
                         let Ok(mut ts) = shared_for_tick.tick.lock() else {
                             continue;
                         };
-                        mole_host::make_tick(&mut p, &mut ts, dt)
+                        let tk = mole_host::make_tick(&mut p, &mut ts, dt);
+                        // primer tick con datos de esta fuente: fijar el ancla
+                        if p.last_t_us > 0 {
+                            if let Ok(mut a) = shared_for_tick.t_anchor.lock() {
+                                if a.is_none() {
+                                    let wall = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_millis() as u64)
+                                        .unwrap_or(0);
+                                    *a = Some((p.last_t_us, wall));
+                                }
+                            }
+                        }
+                        tk
                     };
                     tick["source"] = source_json(&shared_for_tick);
                     let _ = handle.emit("mole:tick", tick);
