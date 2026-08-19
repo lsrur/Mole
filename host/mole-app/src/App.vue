@@ -132,6 +132,15 @@ async function openReplay() {
   }
 }
 
+async function startDemo() {
+  error.value = "";
+  try {
+    source.value = await invoke("demo_start", { rate: 50000 });
+  } catch (e) {
+    error.value = String(e);
+  }
+}
+
 function fmtRate(n) {
   if (n == null) return "—";
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -162,6 +171,7 @@ const linkClass = computed(() => {
       <span class="sep"></span>
       <input v-model="replayPath" placeholder="ruta a un stream crudo…" size="34" />
       <button class="cold" @click="openReplay">Replay</button>
+      <button class="cold" title="fuente sintética a 50k rec/s (PERF-09)" @click="startDemo">Demo</button>
       <span class="sep"></span>
       <button class="cold" title="spike UI-08: desprender Watch" @click="popoutSpike">⧉</button>
       <button class="cold" title="restaurar layout de fábrica" @click="resetLayout">⌧</button>

@@ -221,6 +221,17 @@ function toggleMark(index) {
   markIdx.value = markIdx.value === index ? null : index;
 }
 
+// FEAT-03: silenciar/restaurar un tag EN EL PRODUCTOR, via CTL_SET_LEVEL.
+// El tag silenciado deja de gastar ancho de banda (PR-19).
+async function silenceTag(tag, ev) {
+  if (!tag) return;
+  try {
+    await invoke("set_tag_level", { sym: tag, level: ev.shiftKey ? 0 : 4 });
+  } catch {
+    /* replay/demo: no hay downlink; con placa esto viaja de verdad */
+  }
+}
+
 function tagName(tag) {
   if (!tag) return "";
   return symNames.value[tag]?.[0] ?? `#${tag}`;
@@ -307,7 +318,12 @@ const newBehind = computed(() => {
               }}</span>
               <span v-if="showTask" class="col-tc">t{{ rowAt(item.index).task }}</span>
               <span v-if="showCore" class="col-tc">c{{ rowAt(item.index).core }}</span>
-              <span class="col-tag">{{ tagName(rowAt(item.index).tag) }}</span>
+              <span
+                class="col-tag"
+                :title="rowAt(item.index).tag ? 'click: silenciar tag en el MCU (FEAT-03) · shift+click: restaurar' : ''"
+                @click="silenceTag(rowAt(item.index).tag, $event)"
+                >{{ tagName(rowAt(item.index).tag) }}</span
+              >
               <span class="col-msg">{{ rowAt(item.index).text }}</span>
             </template>
             <span v-else class="col-marker">{{ rowAt(item.index).text }}</span>

@@ -19,6 +19,8 @@ struct Shared {
     tick: Mutex<TickState>,
     /// stop-flag del lector vigente; conectar de nuevo mata al anterior
     reader_stop: Mutex<Arc<AtomicBool>>,
+    /// cola de frames de downlink hacia el lector serial (PR-15)
+    downlink_tx: Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>,
     source_desc: Mutex<String>,
 }
 
@@ -28,6 +30,7 @@ impl Shared {
             pipeline: Mutex::new(Pipeline::new(0)),
             tick: Mutex::new(TickState::default()),
             reader_stop: Mutex::new(Arc::new(AtomicBool::new(false))),
+            downlink_tx: Mutex::new(None),
             source_desc: Mutex::new(String::new()),
         }
     }
@@ -93,6 +96,10 @@ fn connect_serial(state: AppState, port: String, baud: u32) -> Result<String, St
         slot.store(true, Ordering::SeqCst);
         *slot = my_stop.clone();
     }
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    if let Ok(mut slot) = shared.downlink_tx.lock() {
+        *slot = Some(tx);
+    }
     let port_owned = port.clone();
     std::thread::spawn(move || {
         let port = port_owned;
@@ -104,16 +111,22 @@ fn connect_serial(state: AppState, port: String, baud: u32) -> Result<String, St
                 return;
             }
             match transport.as_mut() {
-                Some(tr) => match tr.read_some(&mut buf) {
-                    Ok(0) => std::thread::sleep(Duration::from_millis(2)),
-                    Ok(n) => {
-                        backoff_ms = 100;
-                        if let Ok(mut p) = shared.pipeline.lock() {
-                            p.feed(&buf[..n]);
-                        }
+                Some(tr) => {
+                    // downlink pendiente (CTL_SET_LEVEL, etc.)
+                    while let Ok(frame) = rx.try_recv() {
+                        let _ = tr.write_all_frame(&frame);
                     }
-                    Err(_) => transport = None, // el puerto desapareció
-                },
+                    match tr.read_some(&mut buf) {
+                        Ok(0) => std::thread::sleep(Duration::from_millis(2)),
+                        Ok(n) => {
+                            backoff_ms = 100;
+                            if let Ok(mut p) = shared.pipeline.lock() {
+                                p.feed(&buf[..n]);
+                            }
+                        }
+                        Err(_) => transport = None, // el puerto desapareció
+                    }
+                }
                 None => {
                     std::thread::sleep(Duration::from_millis(backoff_ms));
                     backoff_ms = (backoff_ms * 2).min(5000);
@@ -237,6 +250,122 @@ fn sym_names(state: AppState) -> Result<serde_json::Value, String> {
     Ok(serde_json::Value::Object(map))
 }
 
+/// FEAT-03: nivel de log por tag, en vivo, sin recompilar (PR-19). El
+/// firmware ya lo honra (F1-T09); acá solo viaja el CTL_SET_LEVEL.
+#[tauri::command]
+fn set_tag_level(state: AppState, sym: u16, level: u8) -> Result<(), String> {
+    use mole_codec::frame::encode_frame;
+    use mole_codec::record::Record;
+    use mole_codec::types::TypeRegistry;
+    let reg = TypeRegistry::new();
+    let rec = Record::CtlSetLevel { sym_id: sym, level }
+        .encode(0, &reg)
+        .map_err(|e| e.to_string())?;
+    let (_, wire) = encode_frame(0, 0, 0, &[rec]).map_err(|e| e.to_string())?;
+    let guard = state.downlink_tx.lock().map_err(|e| e.to_string())?;
+    match guard.as_ref() {
+        Some(tx) => tx.send(wire).map_err(|e| e.to_string()),
+        None => Err("sin transporte con downlink (replay o demo)".into()),
+    }
+}
+
+/// F2-B09: fuente sintética para medir PERF-09 (UI a 60 fps con 50k rec/s).
+/// Genera frames reales por el pipeline completo, sin hardware.
+#[tauri::command]
+fn demo_start(state: AppState, rate: u32) -> Result<String, String> {
+    use mole_codec::args::ArgType;
+    use mole_codec::frame::encode_frame;
+    use mole_codec::record::{FmtDef, Record};
+    use mole_codec::types::TypeRegistry;
+    use mole_codec::wire::WireType;
+
+    let shared = state.inner().clone();
+    let my_stop = Arc::new(AtomicBool::new(false));
+    if let Ok(mut slot) = shared.reader_stop.lock() {
+        slot.store(true, Ordering::SeqCst);
+        *slot = my_stop.clone();
+    }
+    if let Ok(mut d) = state.source_desc.lock() {
+        *d = format!("demo: {rate} rec/s sintéticos");
+    }
+    std::thread::spawn(move || {
+        let reg = TypeRegistry::new();
+        // catálogo del demo: tag + fmt, una sola vez
+        let defs = vec![
+            Record::SymDef { sym_id: 1, kind: 2, parent: 0, name: b"demo".to_vec() }
+                .encode(0, &reg)
+                .unwrap_or_default(),
+            Record::SymDef { sym_id: 2, kind: 1, parent: 0, name: b"seno".to_vec() }
+                .encode(0, &reg)
+                .unwrap_or_default(),
+            Record::FmtDef(FmtDef {
+                fmt_id: 1,
+                file_sym: 0,
+                line: 1,
+                arg_types: vec![ArgType::Scalar(WireType::I32), ArgType::Scalar(WireType::F32)],
+                fmt: b"iter={} v={:.2}".to_vec(),
+            })
+            .encode(0, &reg)
+            .unwrap_or_default(),
+        ];
+        let mut seq: u16 = 0;
+        let mut t_us: u64 = 1_000_000;
+        let mut i: u32 = 0;
+        if let Ok((_, wire)) = encode_frame(seq, t_us, 0, &defs) {
+            seq = seq.wrapping_add(1);
+            if let Ok(mut p) = shared.pipeline.lock() {
+                p.feed(&wire);
+            }
+        }
+        loop {
+            if my_stop.load(Ordering::Relaxed) {
+                return;
+            }
+            // tanda de 20 ms
+            let n = (rate / 50).max(1);
+            let mut recs = Vec::with_capacity(n as usize);
+            for k in 0..n {
+                let dt = (k * 20_000 / n.max(1)) as u16;
+                let rec = if k % 2 == 0 {
+                    let v = ((i as f32) * 0.01).sin() * 2.5;
+                    let mut args = Vec::with_capacity(8);
+                    args.extend_from_slice(&(i as i32).to_le_bytes());
+                    args.extend_from_slice(&v.to_le_bytes());
+                    Record::LogFmt {
+                        level: (i % 6) as u8,
+                        task_id: 1,
+                        core: 0,
+                        tag_sym: 1,
+                        fmt_id: 1,
+                        args_raw: args,
+                    }
+                } else {
+                    Record::Watch {
+                        sym: 2,
+                        value: mole_codec::args::Value::F32(((i as f32) * 0.02).sin()),
+                    }
+                };
+                if let Ok(bytes) = rec.encode(dt, &reg) {
+                    recs.push(bytes);
+                }
+                i = i.wrapping_add(1);
+            }
+            // en frames de a 200 (PR-04 los limita por tamaño igual)
+            for chunk in recs.chunks(200) {
+                if let Ok((_, wire)) = encode_frame(seq, t_us, 0, chunk) {
+                    seq = seq.wrapping_add(1);
+                    if let Ok(mut p) = shared.pipeline.lock() {
+                        p.feed(&wire);
+                    }
+                }
+            }
+            t_us += 20_000;
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    });
+    Ok(format!("demo a {rate} rec/s"))
+}
+
 #[tauri::command]
 fn source_desc(state: AppState) -> String {
     state
@@ -258,6 +387,8 @@ pub fn run() {
             log_query,
             watch_snapshot,
             sym_names,
+            set_tag_level,
+            demo_start,
             source_desc
         ])
         .setup(move |app| {
