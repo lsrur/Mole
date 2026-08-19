@@ -118,7 +118,8 @@ async function openFile() {
       title: t("openFile"),
     });
     if (!path) return;
-    await invoke("open_replay", { path, mode: "realtime" });
+    // sin autoreproducir: queda en 0/N en modo paso; 1×/max arrancan
+    await invoke("open_replay", { path, mode: "step" });
   } catch (e) {
     error.value = String(e);
   }
@@ -152,6 +153,15 @@ async function clearData() {
 
 async function setReplayMode(mode) {
   await invoke("replay_mode", { mode });
+}
+
+async function rewindReplay() {
+  error.value = "";
+  try {
+    await invoke("replay_rewind");
+  } catch (e) {
+    error.value = String(e);
+  }
 }
 
 async function stepReplay(n) {
@@ -227,6 +237,7 @@ const linkClass = computed(() => {
           {{ source.paused ? t("resume") : t("pause") }}
         </button>
         <template v-if="source.kind === 'file' && source.replay">
+          <button class="cold" @click="rewindReplay">{{ t("rewind") }}</button>
           <span class="seg">
             <button
               class="seg-btn"

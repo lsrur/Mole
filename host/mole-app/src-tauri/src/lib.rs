@@ -19,6 +19,8 @@ struct ReplayCtl {
     total: usize,
     mode: Arc<Mutex<String>>, // "realtime" | "max" | "step"
     steps: Arc<std::sync::atomic::AtomicI64>,
+    /// para rebobinar: reabrir el mismo archivo desde el frame 0
+    path: String,
 }
 
 struct Shared {
@@ -72,6 +74,10 @@ type AppState<'a> = State<'a, Arc<Shared>>;
 /// frame con replay_step).
 #[tauri::command]
 fn open_replay(state: AppState, path: String, mode: String) -> Result<String, String> {
+    do_open_replay(state.inner().clone(), path, mode)
+}
+
+fn do_open_replay(shared: Arc<Shared>, path: String, mode: String) -> Result<String, String> {
     let data = std::fs::read(&path).map_err(|e| e.to_string())?;
     // separar frames (bloques terminados en 0x00) y extraer t_base_us
     let mut frames: Vec<(Vec<u8>, u64)> = Vec::new();
@@ -96,7 +102,6 @@ fn open_replay(state: AppState, path: String, mode: String) -> Result<String, St
         return Err("el archivo no contiene frames".into());
     }
 
-    let shared = state.inner().clone();
     let my_stop = Arc::new(AtomicBool::new(false));
     if let Ok(mut slot) = shared.reader_stop.lock() {
         slot.store(true, Ordering::SeqCst);
@@ -107,6 +112,7 @@ fn open_replay(state: AppState, path: String, mode: String) -> Result<String, St
         total,
         mode: Arc::new(Mutex::new(mode.clone())),
         steps: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        path: path.clone(),
     };
     let pos = ctl.pos.clone();
     let mode_arc = ctl.mode.clone();
@@ -162,6 +168,30 @@ fn open_replay(state: AppState, path: String, mode: String) -> Result<String, St
         }
     });
     Ok(format!("{path} ({total} frames)"))
+}
+
+/// Rebobinar: vuelve al frame 0 del mismo archivo con sesión fresca (el
+/// archivo re-emite sus propias definiciones, así que acá sí se resetea
+/// el pipeline entero) conservando el modo de reproducción vigente.
+#[tauri::command]
+fn replay_rewind(state: AppState) -> Result<String, String> {
+    let (path, mode) = {
+        let guard = state.replay.lock().map_err(|e| e.to_string())?;
+        let r = guard.as_ref().ok_or("sin replay abierto")?;
+        let mode = r.mode.lock().map(|m| m.clone()).unwrap_or_else(|_| "step".into());
+        (r.path.clone(), mode)
+    };
+    {
+        let mut p = state.pipeline.lock().map_err(|e| e.to_string())?;
+        *p = Pipeline::new(0);
+    }
+    {
+        let mut ts = state.tick.lock().map_err(|e| e.to_string())?;
+        let seq = ts.seq;
+        *ts = TickState::default();
+        ts.seq = seq;
+    }
+    do_open_replay(state.inner().clone(), path, mode)
 }
 
 #[tauri::command]
@@ -767,6 +797,7 @@ pub fn run() {
             span_snapshot,
             state_snapshot,
             clear_data,
+            replay_rewind,
             command_list,
             send_command,
             source_desc
