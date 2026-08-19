@@ -4,6 +4,7 @@ idf_component_register(
     SRCS
         "src/mole_codec.cpp"
         "src/mole_core.cpp"
+        "src/mole_task.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "src"
     PRIV_REQUIRES esp_timer

@@ -114,5 +114,38 @@ uint8_t counters_collect(uint8_t* payload);
 // Incrementos perdidos por llamar count() desde ISR sin registro previo.
 uint32_t counter_lost_from_isr();
 
+// ---------------------------------------------------------------------------
+// La bomba de la moleTask (FW-06, PR-05): portable y testeable en host.
+// El wrapper de FreeRTOS y el transporte la llaman en loop.
+// ---------------------------------------------------------------------------
+
+// Recibe un frame de WIRE completo (COBS + delimitador 0x00).
+using FrameSink = bool (*)(void* ctx, const uint8_t* wire, size_t len);
+
+struct TaskState {
+    uint8_t frame_buf[MOLE_FRAME_MAX];
+    uint8_t wire_buf[MOLE_FRAME_MAX + MOLE_FRAME_MAX / 254 + 8];
+    bool frame_open = false;
+    uint64_t frame_t_base = 0;
+    uint64_t frame_opened_at = 0;
+    uint16_t seq = 0;
+    uint16_t rec_count = 0;
+    size_t frame_len = 0;
+    uint8_t flags_pending = 0;   // FLAG_CATALOG/FLAG_DROPS del frame abierto
+    bool urgent = false;         // PR-05(c)
+    uint64_t last_stats_us = 0;
+    uint64_t last_counter_us = 0;
+    uint32_t last_dropped_seen = 0;
+    uint32_t tx_bytes = 0;
+};
+
+// Un paso: drena meta → counters/stats vencidos → rings (round-robin),
+// arma frames y emite por el sink lo que corresponda cerrar (PR-05).
+// Devuelve cuántos records movió en este paso.
+uint32_t task_pump(TaskState& st, FrameSink sink, void* ctx);
+
+// Cierra y emite el frame abierto, si lo hay (mole::flush()).
+void task_flush(TaskState& st, FrameSink sink, void* ctx);
+
 }  // namespace detail
 }  // namespace mole

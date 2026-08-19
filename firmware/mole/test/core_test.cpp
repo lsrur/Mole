@@ -646,6 +646,133 @@ static void test_event() {
     CHECK(mole::get_u32(buf + 2) == 42);
 }
 
+// ---------------------------------------------------------------------------
+// F1-T07: la bomba de la moleTask, end-to-end en host
+// ---------------------------------------------------------------------------
+
+struct WireCapture {
+    std::vector<std::vector<uint8_t>> frames;
+    std::vector<uint8_t> stream;
+};
+
+static bool capture_sink(void* ctx, const uint8_t* wire, size_t len) {
+    auto* cap = static_cast<WireCapture*>(ctx);
+    cap->frames.emplace_back(wire, wire + len);
+    cap->stream.insert(cap->stream.end(), wire, wire + len);
+    return true;
+}
+
+static void test_pump_end_to_end() {
+    mole::detail::reset_for_tests();
+    mole::testhooks::set_time_us(1'000'000);
+
+    // 3 productores reales emitiendo mientras la bomba corre
+    const uint32_t kPerThread = 20000;
+    std::atomic<bool> done{false};
+    std::vector<std::thread> producers;
+    for (int p = 0; p < 3; p++) {
+        producers.emplace_back([p] {
+            for (uint32_t i = 0; i < kPerThread; i++) {
+                switch (p) {
+                    case 0:
+                        MOLE_INFO("crudo={} v={:.2}", static_cast<int32_t>(i), 2.47f);
+                        break;
+                    case 1:
+                        mole::watch("Voltage", 1.5f);
+                        break;
+                    default:
+                        mole::count("irq_rx");
+                        break;
+                }
+                if (i % 64 == 0) std::this_thread::yield();
+            }
+        });
+    }
+
+    WireCapture cap;
+    mole::detail::TaskState st;
+    std::thread pump([&] {
+        while (!done.load()) {
+            mole::testhooks::advance_us(1000);  // el reloj avanza 1 ms por vuelta
+            mole::detail::task_pump(st, capture_sink, &cap);
+            std::this_thread::yield();
+        }
+        mole::testhooks::advance_us(400'000);  // vencer counters pendientes
+        mole::detail::task_pump(st, capture_sink, &cap);
+        mole::detail::task_flush(st, capture_sink, &cap);
+    });
+    for (auto& t : producers) t.join();
+    done.store(true);
+    pump.join();
+
+    // decodificar TODO el stream con el codec (el mismo validado contra los
+    // vectores compartidos): cuenta por tipo, CRC y seq
+    uint32_t logs = 0, watches = 0, counter_delta_sum = 0, stats_recs = 0;
+    uint32_t defs = 0, others = 0;
+    uint16_t expected_seq = 0;
+    bool seq_ok = true;
+    for (const auto& f : cap.frames) {
+        CHECK(f.back() == 0x00);
+        uint8_t pre[MOLE_FRAME_MAX];
+        size_t pre_n = 0;
+        CHECK(mole::cobs_decode(pre, sizeof pre, &pre_n, f.data(), f.size() - 1) ==
+              mole::Err::Ok);
+        mole::FrameHeader h;
+        CHECK(mole::frame_parse_header(pre, pre_n, &h) == mole::Err::Ok);
+        if (h.seq != expected_seq) seq_ok = false;
+        expected_seq = static_cast<uint16_t>(h.seq + 1);
+        std::vector<mole::RecordView> recs(2048);
+        size_t count = 0;
+        CHECK(mole::frame_records(pre, pre_n, recs.data(), recs.size(), &count) ==
+              mole::Err::Ok);
+        for (size_t i = 0; i < count; i++) {
+            switch (recs[i].type) {
+                case mole::REC_LOG_FMT:
+                    logs++;
+                    break;
+                case mole::REC_WATCH:
+                    watches++;
+                    break;
+                case mole::REC_COUNTER: {
+                    const uint8_t n = recs[i].payload[0];
+                    for (uint8_t k = 0; k < n; k++) {
+                        counter_delta_sum +=
+                            mole::get_u32(recs[i].payload + 1 + 6 * k + 2);
+                    }
+                    break;
+                }
+                case mole::REC_STATS:
+                    stats_recs++;
+                    break;
+                case mole::REC_SYM_DEF:
+                case mole::REC_FMT_DEF:
+                    defs++;
+                    break;
+                default:
+                    others++;
+                    break;
+            }
+        }
+    }
+    CHECK(seq_ok);
+    CHECK(others == 0);
+    CHECK(defs >= 3);  // Voltage, irq_rx, archivo, fmt...
+    CHECK(stats_recs >= 1);
+
+    // TEST-04 en miniatura: emitido = recibido + descartado, por canal
+    const auto s = mole::detail::ring_stats();
+    CHECK(logs + s.dropped_by_kind[mole::detail::CH_LOG] == kPerThread);
+    CHECK(watches + s.dropped_by_kind[mole::detail::CH_WATCH] == kPerThread);
+    CHECK(counter_delta_sum == kPerThread);  // los counters no se descartan: se agregan
+
+    // el stream queda para la validacion cruzada con molectl (F1-T11)
+    std::FILE* f = std::fopen("e2e_stream.bin", "wb");
+    if (f) {
+        std::fwrite(cap.stream.data(), 1, cap.stream.size(), f);
+        std::fclose(f);
+    }
+}
+
 int main() {
     test_intern_secuencial_y_dedup();
     test_sym_def_bytes_contra_vector();
@@ -665,6 +792,7 @@ int main() {
     test_watch_bytes_y_rate_limit();
     test_counters_agregados();
     test_event();
+    test_pump_end_to_end();
     if (g_fails == 0) {
         std::puts("core_test: ok");
         return 0;

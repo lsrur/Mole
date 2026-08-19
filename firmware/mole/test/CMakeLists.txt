@@ -18,6 +18,7 @@ add_executable(core_test
   core_test.cpp
   mole_port_host.cpp
   ../src/mole_core.cpp
+  ../src/mole_task.cpp
 )
 target_include_directories(core_test PRIVATE ../include ../src)
 target_compile_definitions(core_test PRIVATE MOLE_MAX_SYMBOLS=4)
