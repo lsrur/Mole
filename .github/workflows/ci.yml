@@ -22,17 +22,39 @@ jobs:
         run: cargo run --locked -p mole-vectors -- validate ../protocol/codec_vectors.json
         working-directory: host
 
-  # S-3: el codec de C++ contra EL MISMO archivo de vectores, compilado en host
+  # S-3: el codec de C++ contra EL MISMO archivo de vectores, compilado en
+  # host. Desde F1 también corre core_test (símbolos, rings, macros, pump) y
+  # la sonda de costo cero; después valida el stream de la moleTask con
+  # molectl (validación cruzada C++ → Rust).
   cpp:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - name: Configure
         run: cmake -S firmware/mole/test -B firmware/mole/test/build
       - name: Build
         run: cmake --build firmware/mole/test/build
-      - name: Test (S-3, S-5)
+      - name: Test (S-3, S-5, F1 core)
         run: ctest --test-dir firmware/mole/test/build --output-on-failure
+      - name: Validacion cruzada moleTask -> molectl
+        run: cargo run --locked -p molectl -- decode-file ../firmware/mole/test/build/e2e_stream.bin
+        working-directory: host
+      - name: Benchmark del decoder (HOST-03)
+        run: cargo run --locked --release -p molectl -- bench-decoder --frames 3000
+        working-directory: host
+
+  # F1: el componente compila para el target de referencia (esp32s3) con el
+  # IDF pineado del plan (v5.5)
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: firmware/mole/examples/bench
 
   # S-1: el archivo valida contra su JSON Schema, los 12 ancla se recalculan
   # y la verificacion cruzada (V-2.3) recalcula todo lo que anchors.py alcanza
