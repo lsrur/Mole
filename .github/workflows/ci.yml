@@ -23,6 +23,9 @@ jobs:
       - name: Validar codec_vectors.json contra el codec
         run: cargo run --locked -p mole-vectors -- validate ../protocol/codec_vectors.json
         working-directory: host
+      - name: Smoke de store (PERF-10/11 reducido)
+        run: cargo run --locked --release -p molectl -- bench-store --records 1000000
+        working-directory: host
 
   # S-3: el codec de C++ contra EL MISMO archivo de vectores, compilado en
   # host. Desde F1 también corre core_test (símbolos, rings, macros, pump) y
