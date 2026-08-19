@@ -5,7 +5,11 @@
 //! forma de garantizarlo es que haya un solo pipeline.
 
 pub mod pipeline;
+pub mod store;
 pub mod transport;
+pub mod watch;
 
 pub use pipeline::{Counts, Pipeline};
+pub use store::{LogStore, Retention, RowKind};
 pub use transport::{FileReplay, SerialTransport, Transport};
+pub use watch::{WatchStats, WatchStore};
