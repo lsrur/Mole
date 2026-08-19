@@ -1,0 +1,4 @@
+.DS_Store
+/host/target/
+/firmware/mole/test/build/
+__pycache__/

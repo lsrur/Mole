@@ -1,0 +1,13 @@
+[package]
+name = "mole-codec"
+description = "Codec del protocolo Mole v2: COBS, CRC32, frames, records, argumentos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]

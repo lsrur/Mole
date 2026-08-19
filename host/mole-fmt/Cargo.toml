@@ -1,0 +1,13 @@
+[package]
+name = "mole-fmt"
+description = "Formateador de llaves del host: renderiza REC_LOG_FMT desde fmt_id + argumentos tipados"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]

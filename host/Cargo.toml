@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["mole-codec", "mole-fmt", "mole-vectors"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

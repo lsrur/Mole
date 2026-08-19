@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --workspace --locked
+        working-directory: host
+      - name: Test
+        run: cargo test --workspace --locked
+        working-directory: host
+
+  cpp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S firmware/mole/test -B firmware/mole/test/build
+      - name: Build
+        run: cmake --build firmware/mole/test/build
+      - name: Test
+        run: ctest --test-dir firmware/mole/test/build --output-on-failure
+
+  # T-16 agrega: validación de codec_vectors.json contra su schema
+  # y verificación cruzada con anchors.py.
