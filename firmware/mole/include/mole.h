@@ -24,6 +24,22 @@ namespace mole {
 // Las macros lo garantizan por construcción.
 SymId intern(const char* name, SymKind kind, SymId parent = kSymNone);
 
+// Configuración de arranque (§8.5). Auto elige CDC nativo si existe.
+enum class Transport : uint8_t { Auto = 0, Uart = 1, UsbCdc = 2 };
+
+struct Config {
+    Transport transport = Transport::Auto;
+    uint32_t baud = 921600;  // solo UART (TR-01)
+    uint8_t task_prio = 0;   // 0 = default (tskIDLE_PRIORITY + 2, FW-06)
+    int8_t task_core = 0;    // FW-06: core 0 por defecto
+};
+
+// Arranca la moleTask, única dueña del transporte (ARQ-01). Solo target.
+void begin(const Config& cfg = {});
+void end();
+// Cierra y emite el frame abierto (PR-05 d). Asíncrono: marca y sigue.
+void flush();
+
 // Fallback: mensaje ya formateado en el MCU (REC-36). Se accede por acá,
 // nunca por las macros. Para mensajes armados en runtime.
 void logs(Level lvl, const char* msg);

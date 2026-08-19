@@ -54,15 +54,15 @@ namespace detail {
 // ---- API del core (implementada en mole_core.cpp) ----
 uint16_t alloc_type_id();
 bool meta_push_public(uint8_t type, const uint8_t* payload, uint8_t len);
+bool meta_push_no_hash_public(uint8_t type, const uint8_t* payload, uint8_t len);
+void register_type_reemit(void (*fn)());
 
 // (HasTypeDesc/HasEnumDesc y las forward declarations de type_id/
 // pack_struct_values viven en mole_log.h)
 
 template <class T>
-uint16_t register_type() {
+uint8_t build_type_payload(uint8_t* payload, uint16_t id) {
     constexpr auto d = mole_describe(static_cast<const T*>(nullptr));
-    const uint16_t id = alloc_type_id();
-    uint8_t payload[255];
     uint8_t p = 0;
     payload[p++] = static_cast<uint8_t>(id);
     payload[p++] = static_cast<uint8_t>(id >> 8);
@@ -88,16 +88,29 @@ uint16_t register_type() {
         payload[p++] = static_cast<uint8_t>(ref);
         payload[p++] = static_cast<uint8_t>(ref >> 8);
     }
+    return p;
+}
+
+template <class T>
+void reemit_type() {
+    uint8_t payload[255];
+    const uint8_t p = build_type_payload<T>(payload, type_id<T>());
+    meta_push_no_hash_public(REC_TYPE_DEF, payload, p);
+}
+
+template <class T>
+uint16_t register_type() {
+    const uint16_t id = alloc_type_id();
+    uint8_t payload[255];
+    const uint8_t p = build_type_payload<T>(payload, id);
     meta_push_public(REC_TYPE_DEF, payload, p);
     return id;
 }
 
 template <class E>
-uint16_t register_enum() {
+uint8_t build_enum_payload(uint8_t* payload, uint16_t id) {
     constexpr auto d = mole_describe_enum(static_cast<const E*>(nullptr));
-    const uint16_t id = alloc_type_id();
     const size_t esize = wire_fixed_size(d.wire);
-    uint8_t payload[255];
     uint8_t p = 0;
     payload[p++] = static_cast<uint8_t>(id);
     payload[p++] = static_cast<uint8_t>(id >> 8);
@@ -117,19 +130,42 @@ uint16_t register_enum() {
         payload[p++] = static_cast<uint8_t>(name_sym);
         payload[p++] = static_cast<uint8_t>(name_sym >> 8);
     }
+    return p;
+}
+
+template <class E>
+void reemit_enum() {
+    uint8_t payload[255];
+    const uint8_t p = build_enum_payload<E>(payload, enum_type_id<E>());
+    meta_push_no_hash_public(REC_ENUM_DEF, payload, p);
+}
+
+template <class E>
+uint16_t register_enum() {
+    const uint16_t id = alloc_type_id();
+    uint8_t payload[255];
+    const uint8_t p = build_enum_payload<E>(payload, id);
     meta_push_public(REC_ENUM_DEF, payload, p);
     return id;
 }
 
 template <class T>
 uint16_t type_id() {
-    static const uint16_t id = register_type<T>();
+    static const uint16_t id = [] {
+        const uint16_t fresh = register_type<T>();
+        register_type_reemit(&reemit_type<T>);
+        return fresh;
+    }();
     return id;
 }
 
 template <class E>
 uint16_t enum_type_id() {
-    static const uint16_t id = register_enum<E>();
+    static const uint16_t id = [] {
+        const uint16_t fresh = register_enum<E>();
+        register_type_reemit(&reemit_enum<E>);
+        return fresh;
+    }();
     return id;
 }
 

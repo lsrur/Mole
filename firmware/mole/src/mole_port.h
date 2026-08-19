@@ -28,5 +28,22 @@ uint8_t core_id();
 // deadline se controla con now_us(); esto solo cede la CPU.
 void yield_short();
 
+// Identidad de sesión (CAT-07/CAT-09). Las cadenas son estáticas.
+struct SessionFields {
+    uint32_t epoch;
+    uint16_t chip_model;
+    uint16_t chip_rev;
+    const char* idf_ver;
+    const char* app_name;
+    const char* app_build_time;
+    uint8_t elf_sha[8];
+    uint16_t cpu_freq_mhz;
+    uint32_t free_heap;
+};
+void session_fields(SessionFields* out);
+
+// Reinicio del dispositivo (CTL_RESET con magic, SEC-02). En host: contador.
+void reset_device();
+
 }  // namespace port
 }  // namespace mole

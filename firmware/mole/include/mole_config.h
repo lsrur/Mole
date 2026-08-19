@@ -82,6 +82,18 @@
 #endif
 #endif
 
+#ifndef MOLE_MAX_FMTS
+#ifdef CONFIG_MOLE_MAX_FMTS
+#define MOLE_MAX_FMTS CONFIG_MOLE_MAX_FMTS
+#else
+#define MOLE_MAX_FMTS 128
+#endif
+#endif
+
+#ifndef MOLE_MAX_TYPE_DEFS
+#define MOLE_MAX_TYPE_DEFS 64
+#endif
+
 // FW-13: niveles y canales por compilación.
 #ifndef MOLE_LEVEL_MIN
 #define MOLE_LEVEL_MIN 0

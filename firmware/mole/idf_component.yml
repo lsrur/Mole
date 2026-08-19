@@ -1,0 +1,11 @@
+version: "2.0.0-dev"
+description: "Prototipado interactivo y debugging de firmware ESP32"
+url: "https://github.com/lsrur/Mole"
+dependencies:
+  idf: ">=5.1"
+  # TR-02: USB-CDC nativo (el transporte preferido en S2/S3). En targets sin
+  # USB OTG el codigo cae al stub y begin() usa UART.
+  espressif/esp_tinyusb:
+    version: "^1"
+    rules:
+      - if: "target in [esp32s2, esp32s3]"

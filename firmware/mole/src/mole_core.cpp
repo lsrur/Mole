@@ -77,6 +77,20 @@ struct Core {
 
     // ---- log diferido (REC-34) y niveles (PR-19) ----
     std::atomic<uint16_t> fmt_next{1};
+    // retención para el resync (CAT-10): lo justo para reconstruir el
+    // REC_FMT_DEF (punteros a literales, no copias)
+    struct FmtSlot {
+        const char* fmt = nullptr;
+        const char* file = nullptr;
+        uint16_t line = 0;
+        uint8_t argc = 0;
+        uint8_t tags_len = 0;
+        uint8_t tags[12] = {};
+    };
+    FmtSlot fmt_slots[MOLE_MAX_FMTS];
+    // re-emisión de TYPE/ENUM defs (los descriptores viven en templates)
+    void (*type_reemits[MOLE_MAX_TYPE_DEFS])() = {};
+    std::atomic<uint16_t> type_reemit_n{0};
     std::atomic<uint8_t> min_level{0};
     // nivel por tag; índice = sym_id (0 = sin tag). u8 atómico, escrito por
     // CTL_SET_LEVEL, leído en el hot path.
@@ -119,7 +133,8 @@ void meta_read_bytes(Core& c, uint8_t* dst, size_t n) {
 
 namespace detail {
 
-bool meta_push(uint8_t type, const uint8_t* payload, uint8_t len) {
+static bool meta_push_impl(uint8_t type, const uint8_t* payload, uint8_t len,
+                           bool feed_hash) {
     Core& c = core();
     std::lock_guard<std::mutex> lock(c.mtx);
     const size_t total = kMetaEntryHeader + len;
@@ -137,8 +152,18 @@ bool meta_push(uint8_t type, const uint8_t* payload, uint8_t len) {
     put_u64(hdr + 3, port::now_us());
     meta_write_bytes(c, hdr, sizeof hdr);
     meta_write_bytes(c, payload, len);
-    c.hash_state = crc32_update(c.hash_state, payload, len);
+    if (feed_hash) {
+        c.hash_state = crc32_update(c.hash_state, payload, len);
+    }
     return true;
+}
+
+bool meta_push(uint8_t type, const uint8_t* payload, uint8_t len) {
+    return meta_push_impl(type, payload, len, true);
+}
+
+bool meta_push_no_hash(uint8_t type, const uint8_t* payload, uint8_t len) {
+    return meta_push_impl(type, payload, len, false);
 }
 
 bool meta_pop(MetaView* out, uint8_t* buf) {
@@ -191,6 +216,11 @@ void reset_for_tests() {
         s.delta.store(0);
     }
     c.counter_lost_isr.store(0);
+    // los type_id<T>() son estáticos de proceso: sus re-emisiones quedarían
+    // inconsistentes con una tabla de símbolos vaciada (solo pasa en tests)
+    c.type_reemit_n.store(0);
+    for (auto& s : c.fmt_slots) s = Core::FmtSlot{};
+    c.fmt_next.store(1);
     for (auto& p : c.policies) p.store(static_cast<uint8_t>(Policy::DropNewest));
     c.enqueued.store(0);
     c.dropped.store(0);
@@ -454,6 +484,27 @@ bool log_enabled(uint8_t level, SymId tag) {
     return true;
 }
 
+namespace {
+
+// payload REC-34: fmt_id, file_sym, line, argc, arg_types, fmt (PR-20)
+uint8_t build_fmt_payload(uint8_t* payload, uint16_t id, uint16_t file_sym,
+                          uint16_t line, uint8_t argc, const uint8_t* tags,
+                          uint8_t tags_len, const char* fmt) {
+    put_u16(payload, id);
+    put_u16(payload + 2, file_sym);
+    put_u16(payload + 4, line);
+    payload[6] = argc;
+    std::memcpy(payload + 7, tags, tags_len);
+    size_t fmt_len = std::strlen(fmt);
+    const size_t max_fmt = 255 - (7 + tags_len + 1);
+    if (fmt_len > max_fmt) fmt_len = max_fmt;
+    payload[7 + tags_len] = static_cast<uint8_t>(fmt_len);
+    std::memcpy(payload + 7 + tags_len + 1, fmt, fmt_len);
+    return static_cast<uint8_t>(7 + tags_len + 1 + fmt_len);
+}
+
+}  // namespace
+
 uint16_t register_fmt(const char* fmt, const char* file, uint16_t line,
                       uint8_t argc, const uint8_t* tags, uint8_t tags_len) {
     Core& c = core();
@@ -465,20 +516,89 @@ uint16_t register_fmt(const char* fmt, const char* file, uint16_t line,
 #endif
     const uint16_t id = c.fmt_next.fetch_add(1, std::memory_order_relaxed);
 
-    // payload REC-34: fmt_id, file_sym, line, argc, arg_types, fmt (PR-20)
+    // retención para el resync (CAT-10): punteros a literales, sin copia
+    if (id <= MOLE_MAX_FMTS && tags_len <= sizeof c.fmt_slots[0].tags) {
+        Core::FmtSlot& s = c.fmt_slots[id - 1];
+        s.fmt = fmt;
+        s.file = file;
+        s.line = line;
+        s.argc = argc;
+        s.tags_len = tags_len;
+        std::memcpy(s.tags, tags, tags_len);
+    }
+
     uint8_t payload[255];
-    put_u16(payload, id);
-    put_u16(payload + 2, file_sym);
-    put_u16(payload + 4, line);
-    payload[6] = argc;
-    std::memcpy(payload + 7, tags, tags_len);
-    size_t fmt_len = std::strlen(fmt);
-    const size_t max_fmt = 255 - (7 + tags_len + 1);
-    if (fmt_len > max_fmt) fmt_len = max_fmt;
-    payload[7 + tags_len] = static_cast<uint8_t>(fmt_len);
-    std::memcpy(payload + 7 + tags_len + 1, fmt, fmt_len);
-    meta_push(REC_FMT_DEF, payload, static_cast<uint8_t>(7 + tags_len + 1 + fmt_len));
+    const uint8_t plen =
+        build_fmt_payload(payload, id, file_sym, line, argc, tags, tags_len, fmt);
+    meta_push(REC_FMT_DEF, payload, plen);
     return id;
+}
+
+// ---- accesores del resync (CAT-10) ----
+
+uint16_t sym_table_count() {
+    Core& c = core();
+    std::lock_guard<std::mutex> lock(c.mtx);
+    return c.sym_count;
+}
+
+bool sym_table_entry(uint16_t idx, uint8_t* payload, uint8_t* len) {
+    Core& c = core();
+    std::lock_guard<std::mutex> lock(c.mtx);
+    if (idx >= c.sym_count) return false;
+    const SymEntry& e = c.syms[idx];
+    size_t name_len = std::strlen(e.name);
+    if (name_len > 255 - 6) name_len = 255 - 6;
+    put_u16(payload, static_cast<uint16_t>(idx + 1));
+    payload[2] = e.kind;
+    put_u16(payload + 3, e.parent);
+    payload[5] = static_cast<uint8_t>(name_len);
+    std::memcpy(payload + 6, e.name, name_len);
+    *len = static_cast<uint8_t>(6 + name_len);
+    return true;
+}
+
+uint16_t fmt_table_count() {
+    Core& c = core();
+    const uint16_t next = c.fmt_next.load(std::memory_order_relaxed);
+    const uint16_t used = static_cast<uint16_t>(next - 1);
+    return used > MOLE_MAX_FMTS ? MOLE_MAX_FMTS : used;
+}
+
+bool fmt_table_entry(uint16_t idx, uint8_t* payload, uint8_t* len) {
+    Core& c = core();
+    if (idx >= fmt_table_count()) return false;
+    const Core::FmtSlot& s = c.fmt_slots[idx];
+    if (s.fmt == nullptr) return false;
+#if MOLE_LOG_SOURCE
+    const SymId file_sym = intern(s.file, KIND_FILE, 0);  // dedup: mismo id
+#else
+    const SymId file_sym = 0;
+#endif
+    *len = build_fmt_payload(payload, static_cast<uint16_t>(idx + 1), file_sym,
+                             s.line, s.argc, s.tags, s.tags_len, s.fmt);
+    return true;
+}
+
+void register_type_reemit(void (*fn)()) {
+    Core& c = core();
+    const uint16_t i = c.type_reemit_n.fetch_add(1, std::memory_order_relaxed);
+    if (i < MOLE_MAX_TYPE_DEFS) {
+        c.type_reemits[i] = fn;
+    }
+}
+
+size_t type_reemit_count() {
+    Core& c = core();
+    const uint16_t n = c.type_reemit_n.load(std::memory_order_relaxed);
+    return n > MOLE_MAX_TYPE_DEFS ? MOLE_MAX_TYPE_DEFS : n;
+}
+
+void run_type_reemit(size_t i) {
+    Core& c = core();
+    if (i < type_reemit_count() && c.type_reemits[i]) {
+        c.type_reemits[i]();
+    }
 }
 
 void count_oversize_log() {
@@ -494,6 +614,10 @@ uint16_t alloc_type_id() {
 
 bool meta_push_public(uint8_t type, const uint8_t* payload, uint8_t len) {
     return meta_push(type, payload, len);
+}
+
+bool meta_push_no_hash_public(uint8_t type, const uint8_t* payload, uint8_t len) {
+    return meta_push_no_hash(type, payload, len);
 }
 
 }  // namespace detail

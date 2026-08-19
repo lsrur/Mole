@@ -2,8 +2,10 @@
 // Tests de host del core (F1-T02+). Se compila con -DMOLE_MAX_SYMBOLS=4
 // para poder probar el overflow sin registrar 512 símbolos.
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -744,6 +746,8 @@ static void test_pump_end_to_end() {
                 case mole::REC_STATS:
                     stats_recs++;
                     break;
+                case mole::REC_SESSION:  // CAT-11: no solicitada, esperable
+                    break;
                 case mole::REC_SYM_DEF:
                 case mole::REC_FMT_DEF:
                     defs++;
@@ -773,6 +777,166 @@ static void test_pump_end_to_end() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// F1-T09: downlink, handshake y resync
+// ---------------------------------------------------------------------------
+
+namespace mole {
+namespace testhooks {
+uint32_t reset_count();
+}
+}
+
+// arma un frame CTL de downlink válido (mismo framing que el uplink, PR-15)
+static std::vector<uint8_t> ctl_frame(uint8_t type, const std::vector<uint8_t>& payload) {
+    uint8_t buf[512];
+    mole::FrameWriter w;
+    mole::fw_begin(w, buf, sizeof buf, 0, 0, 0);
+    mole::fw_add_record(w, type, 0, payload.data(), static_cast<uint8_t>(payload.size()));
+    const size_t n = mole::fw_end(w);
+    std::vector<uint8_t> wire(600);
+    const size_t wn = mole::cobs_encode(wire.data(), wire.size(), buf, n);
+    wire.resize(wn);
+    wire.push_back(0x00);
+    return wire;
+}
+
+static std::vector<uint8_t> ctl_hello(uint32_t epoch, uint32_t hash) {
+    std::vector<uint8_t> p(9);
+    p[0] = 2;
+    mole::put_u32(p.data() + 1, epoch);
+    mole::put_u32(p.data() + 5, hash);
+    return ctl_frame(mole::CTL_HELLO, p);
+}
+
+// decodifica todos los frames capturados y devuelve conteo por tipo
+static std::map<uint8_t, int> count_types(const WireCapture& cap) {
+    std::map<uint8_t, int> out;
+    for (const auto& f : cap.frames) {
+        uint8_t pre[MOLE_FRAME_MAX];
+        size_t pre_n = 0;
+        CHECK(mole::cobs_decode(pre, sizeof pre, &pre_n, f.data(), f.size() - 1) ==
+              mole::Err::Ok);
+        std::vector<mole::RecordView> recs(2048);
+        size_t count = 0;
+        CHECK(mole::frame_records(pre, pre_n, recs.data(), recs.size(), &count) ==
+              mole::Err::Ok);
+        for (size_t i = 0; i < count; i++) out[recs[i].type]++;
+    }
+    return out;
+}
+
+static void test_downlink_robusto() {
+    mole::detail::reset_for_tests();
+    mole::detail::TaskState st;
+    WireCapture cap;
+    const uint32_t resets_antes = mole::testhooks::reset_count();
+
+    // ruido puro + un frame con CRC roto: nada explota, nada se ejecuta
+    uint8_t noise[64];
+    for (int i = 0; i < 64; i++) noise[i] = static_cast<uint8_t>(i * 7 + 1);
+    noise[63] = 0x00;
+    mole::detail::downlink_feed(st, capture_sink, &cap, noise, sizeof noise);
+    auto bad = ctl_frame(mole::CTL_PING, {1, 0, 0, 0});
+    bad[3] ^= 0x40;  // romper un bit
+    mole::detail::downlink_feed(st, capture_sink, &cap, bad.data(), bad.size());
+    CHECK(st.rx_bad_frames == 2);
+
+    // CTL_RESET sin handshake previo: ignorado (SEC-03)
+    std::vector<uint8_t> magic(4);
+    mole::put_u32(magic.data(), mole::kResetMagic);
+    auto rst = ctl_frame(mole::CTL_RESET, magic);
+    mole::detail::downlink_feed(st, capture_sink, &cap, rst.data(), rst.size());
+    CHECK(mole::testhooks::reset_count() == resets_antes);
+
+    // handshake + CTL_RESET con magic malo: ignorado (SEC-02)
+    auto hello = ctl_hello(0, 0);
+    mole::detail::downlink_feed(st, capture_sink, &cap, hello.data(), hello.size());
+    CHECK(st.hello_seen);
+    auto rst_malo = ctl_frame(mole::CTL_RESET, {0x84, 0, 0, 0});
+    mole::detail::downlink_feed(st, capture_sink, &cap, rst_malo.data(), rst_malo.size());
+    CHECK(mole::testhooks::reset_count() == resets_antes);
+    // con el magic correcto: ahora sí
+    mole::detail::downlink_feed(st, capture_sink, &cap, rst.data(), rst.size());
+    CHECK(mole::testhooks::reset_count() == resets_antes + 1);
+}
+
+static void test_hello_resync_y_late_join() {
+    mole::detail::reset_for_tests();
+    mole::detail::TaskState st;
+    WireCapture cap;
+
+    // firmware "andando": símbolos, un fmt y actividad ya drenada
+    MOLE_INFO_T(radio, "listo {}", 1);
+    mole::watch("Voltage", 1.5f);
+    mole::detail::task_flush(st, capture_sink, &cap);
+    const uint32_t hash_antes = mole::detail::catalog_hash();
+    const auto tipos_antes = count_types(cap);
+    CHECK(tipos_antes.count(0x02) && tipos_antes.count(0x05));
+
+    // late-join: HELLO de un host que no sabe nada → resync completo
+    WireCapture cap2;
+    auto hello = ctl_hello(0, 0);
+    mole::detail::downlink_feed(st, capture_sink, &cap2, hello.data(), hello.size());
+    mole::detail::task_flush(st, capture_sink, &cap2);
+    const auto tipos = count_types(cap2);
+    CHECK(tipos.at(0x01) == 1);  // REC_SESSION
+    CHECK(tipos.at(0x02) == tipos_antes.at(0x02));  // todos los syms de nuevo
+    CHECK(tipos.at(0x05) == tipos_antes.at(0x05));  // todos los fmts de nuevo
+    // el hash NO cambió: las re-emisiones no lo alimentan
+    CHECK(mole::detail::catalog_hash() == hash_antes);
+
+    // HELLO de un host al día (mismo epoch + hash): SIN resync, solo SESSION
+    WireCapture cap3;
+    auto hello_ok = ctl_hello(0x11223344, hash_antes);
+    mole::detail::downlink_feed(st, capture_sink, &cap3, hello_ok.data(), hello_ok.size());
+    mole::detail::task_flush(st, capture_sink, &cap3);
+    const auto tipos3 = count_types(cap3);
+    CHECK(tipos3.at(0x01) == 1);
+    CHECK(tipos3.count(0x02) == 0);
+    CHECK(tipos3.count(0x05) == 0);
+}
+
+static void test_ctl_ping_y_set_level() {
+    mole::detail::reset_for_tests();
+    mole::detail::TaskState st;
+    WireCapture cap;
+    auto hello = ctl_hello(0, 0);
+    mole::detail::downlink_feed(st, capture_sink, &cap, hello.data(), hello.size());
+
+    auto ping = ctl_frame(mole::CTL_PING, {0x0D, 0xF0, 0xFE, 0xCA});
+    mole::detail::downlink_feed(st, capture_sink, &cap, ping.data(), ping.size());
+    mole::detail::task_flush(st, capture_sink, &cap);
+    CHECK(count_types(cap).at(0x04) == 1);  // REC_PONG
+
+    // PR-19 end-to-end: silenciar un tag por downlink apaga el productor
+    MOLE_WARN_T(ruidoso, "spam {}", 1);
+    const mole::SymId tag = mole::intern("ruidoso", mole::KIND_TAG);
+    std::vector<uint8_t> sl(3);
+    mole::put_u16(sl.data(), tag);
+    sl[2] = static_cast<uint8_t>(mole::Level::Error);
+    auto set_level = ctl_frame(mole::CTL_SET_LEVEL, sl);
+    mole::detail::downlink_feed(st, capture_sink, &cap, set_level.data(), set_level.size());
+    const uint32_t antes = mole::detail::ring_stats().enqueued;
+    MOLE_WARN_T(ruidoso, "spam {}", 2);
+    CHECK(mole::detail::ring_stats().enqueued == antes);  // ni se encoló
+}
+
+static void test_session_no_solicitada() {
+    mole::detail::reset_for_tests();
+    mole::detail::TaskState st;
+    WireCapture cap;
+    mole::testhooks::set_time_us(1'000'000);
+    mole::detail::task_pump(st, capture_sink, &cap);
+    mole::testhooks::advance_us(2'100'000);
+    mole::detail::task_pump(st, capture_sink, &cap);
+    mole::testhooks::advance_us(2'100'000);
+    mole::detail::task_pump(st, capture_sink, &cap);
+    mole::detail::task_flush(st, capture_sink, &cap);
+    // CAT-11: una por arranque + una por cada ventana de 2 s sin HELLO
+    CHECK(count_types(cap).at(0x01) >= 3);
+}
+
 int main() {
     test_intern_secuencial_y_dedup();
     test_sym_def_bytes_contra_vector();
@@ -793,6 +957,10 @@ int main() {
     test_counters_agregados();
     test_event();
     test_pump_end_to_end();
+    test_downlink_robusto();
+    test_hello_resync_y_late_join();
+    test_ctl_ping_y_set_level();
+    test_session_no_solicitada();
     if (g_fails == 0) {
         std::puts("core_test: ok");
         return 0;

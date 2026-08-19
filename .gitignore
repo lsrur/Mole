@@ -7,3 +7,4 @@ __pycache__/
 /firmware/mole/examples/bench/sdkconfig.old
 /firmware/mole/examples/bench/dependencies.lock
 /firmware/mole/examples/bench/build_ctrl/
+/firmware/mole/examples/bench/managed_components/

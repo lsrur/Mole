@@ -137,6 +137,12 @@ struct TaskState {
     uint64_t last_counter_us = 0;
     uint32_t last_dropped_seen = 0;
     uint32_t tx_bytes = 0;
+    // ---- downlink (F1-T09) ----
+    uint8_t rx_buf[1024];
+    size_t rx_len = 0;
+    bool hello_seen = false;        // SEC-03
+    uint64_t last_session_us = 0;   // CAT-11: REC_SESSION cada 2 s sin HELLO
+    uint32_t rx_bad_frames = 0;     // CRC/COBS malos, descartados (PR-16)
 };
 
 // Un paso: drena meta → counters/stats vencidos → rings (round-robin),
@@ -146,6 +152,32 @@ uint32_t task_pump(TaskState& st, FrameSink sink, void* ctx);
 
 // Cierra y emite el frame abierto, si lo hay (mole::flush()).
 void task_flush(TaskState& st, FrameSink sink, void* ctx);
+
+// ---------------------------------------------------------------------------
+// Downlink (F1-T09): PR-15..17, CAT-09..11, SEC-02/03
+// ---------------------------------------------------------------------------
+
+// Alimenta bytes de downlink. El parseo y los efectos ocurren acá, en el
+// contexto de la moleTask (PR-17). Frames inválidos se descartan en
+// silencio y se cuentan (PR-16).
+void downlink_feed(TaskState& st, FrameSink sink, void* ctx,
+                   const uint8_t* data, size_t n);
+
+// Como meta_push pero SIN alimentar el catalog_hash: para re-emisiones de
+// resync (el hash cubre cada definición una sola vez; el host toma el hash
+// de REC_SESSION, no lo recomputa del stream).
+bool meta_push_no_hash(uint8_t type, const uint8_t* payload, uint8_t len);
+
+// Registra la función de re-emisión de un TYPE/ENUM def (para el resync).
+void register_type_reemit(void (*fn)());
+
+// Acceso de solo lectura al catálogo para re-emitir en el resync.
+uint16_t sym_table_count();
+bool sym_table_entry(uint16_t idx, uint8_t* payload, uint8_t* len);  // payload REC_SYM_DEF
+uint16_t fmt_table_count();
+bool fmt_table_entry(uint16_t idx, uint8_t* payload, uint8_t* len);  // payload REC_FMT_DEF
+size_t type_reemit_count();
+void run_type_reemit(size_t i);
 
 }  // namespace detail
 }  // namespace mole
