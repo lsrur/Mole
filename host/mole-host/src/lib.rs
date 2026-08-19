@@ -7,6 +7,7 @@
 pub mod filter;
 pub mod pipeline;
 pub mod span;
+pub mod state;
 pub mod store;
 pub mod tick;
 pub mod transport;

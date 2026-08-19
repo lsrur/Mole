@@ -54,12 +54,19 @@ function defaultLayout(api) {
     position: { referencePanel: "watch", direction: "below" },
   });
   api.addPanel({
+    id: "states",
+    component: "states-panel",
+    title: t("statesTitle"),
+    position: { referencePanel: "spans", direction: "within" },
+  });
+  api.addPanel({
     id: "cmds",
     component: "cmds-panel",
     title: t("commandsTitle"),
     position: { referencePanel: "spans", direction: "below" },
     initialHeight: 160,
   });
+  api.getPanel("spans")?.api.setActive();
 }
 
 function onDockReady(event) {
@@ -183,7 +190,7 @@ const linkClass = computed(() => {
   <!-- ventana desprendida: solo el panel, mismo contrato IPC (HOST-14) -->
   <div v-if="panelMode" class="shell">
     <component
-      :is="{ watch: 'watch-panel', spans: 'spans-panel', cmds: 'cmds-panel' }[panelMode] ?? 'log-panel'"
+      :is="{ watch: 'watch-panel', spans: 'spans-panel', states: 'states-panel', cmds: 'cmds-panel' }[panelMode] ?? 'log-panel'"
       class="center"
     />
     <div class="statusbar">
@@ -259,6 +266,10 @@ const linkClass = computed(() => {
       <span>{{ fmtRate(tick?.link.bytesPerSec) }} B/s</span>
       <span>{{ t("dropsMcu") }}: {{ tick?.link.drops ?? "—" }}</span>
       <span>{{ t("gaps") }}: {{ tick?.link.gaps ?? "—" }}</span>
+      <!-- FEAT-25: LEDs de salud declarados por el firmware, siempre visibles -->
+      <span v-for="s in tick?.statuses" :key="s.name" class="led" :class="'led-' + s.level">
+        ● {{ s.name }}
+      </span>
       <span class="grow"></span>
       <span v-if="source.kind === 'none'" class="dim">{{ t("noSource") }}</span>
       <span>tick #{{ tick?.seq ?? 0 }}</span>
@@ -319,6 +330,18 @@ const linkClass = computed(() => {
 .seg-btn.on {
   color: var(--text-0);
   background: var(--bg-selected);
+}
+.led-0 {
+  color: var(--text-2);
+}
+.led-1 {
+  color: var(--link-ok);
+}
+.led-2 {
+  color: var(--link-warn);
+}
+.led-3 {
+  color: var(--link-bad);
 }
 .link-ok {
   color: var(--link-ok);

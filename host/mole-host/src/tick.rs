@@ -47,8 +47,25 @@ pub fn make_tick(p: &mut Pipeline, st: &mut TickState, dt_secs: f64) -> serde_js
         })
         .collect();
 
+    // FEAT-25: los LEDs viajan en el tick — son pocos, y un indicador de
+    // salud que hay que pedir aparte no cumple su función
+    let statuses: Vec<serde_json::Value> = p
+        .statuses
+        .snapshot()
+        .iter()
+        .map(|l| {
+            let name = p
+                .catalog
+                .sym(l.sym)
+                .map(|s| String::from_utf8_lossy(&s.name).into_owned())
+                .unwrap_or_else(|| format!("#{}", l.sym));
+            serde_json::json!({ "name": name, "level": l.level })
+        })
+        .collect();
+
     serde_json::json!({
         "seq": st.seq,
+        "statuses": statuses,
         "link": {
             "recPerSec": (rec_delta as f64 / dt_secs.max(1e-6)) as u64,
             "bytesPerSec": (bytes_delta as f64 / dt_secs.max(1e-6)) as u64,

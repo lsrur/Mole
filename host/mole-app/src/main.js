@@ -4,6 +4,7 @@ import App from "./App.vue";
 import LogPanel from "./panels/LogPanel.vue";
 import WatchPanel from "./panels/WatchPanel.vue";
 import SpansPanel from "./panels/SpansPanel.vue";
+import StatesPanel from "./panels/StatesPanel.vue";
 import CommandsPanel from "./panels/CommandsPanel.vue";
 
 const app = createApp(App);
@@ -11,5 +12,6 @@ const app = createApp(App);
 app.component("log-panel", LogPanel);
 app.component("watch-panel", WatchPanel);
 app.component("spans-panel", SpansPanel);
+app.component("states-panel", StatesPanel);
 app.component("cmds-panel", CommandsPanel);
 app.mount("#app");

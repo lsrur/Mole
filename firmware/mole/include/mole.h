@@ -126,6 +126,19 @@ void count(const char* name, uint32_t n = 1);
 // Marca puntual con argumento (FEAT-23, §7.1). Legal desde ISR (FW-05).
 void event(const char* name, uint32_t arg = 0);
 
+// Transición de máquina de estados (§7.8, FEAT-24). El estado se interna
+// con parent = máquina (CAT-04). Solo desde tarea.
+void state(const char* machine, const char* st);
+
+// LED de salud (§7.8, FEAT-25). Niveles fijados por la spec.
+enum StatusLevel : uint8_t {
+    STATUS_OFF = 0,
+    STATUS_GREEN = 1,
+    STATUS_YELLOW = 2,
+    STATUS_RED = 3,
+};
+void status(const char* name, StatusLevel level);
+
 // Estadísticas internas (PR-13). Snapshot consistente para tests y REC_STATS.
 struct Stats {
     uint32_t enqueued = 0;
@@ -167,6 +180,14 @@ template <class... A>
 inline void watchEvery(A&&...) {}
 inline void count(const char*, uint32_t = 1) {}
 inline void event(const char*, uint32_t = 0) {}
+inline void state(const char*, const char*) {}
+enum StatusLevel : uint8_t {
+    STATUS_OFF = 0,
+    STATUS_GREEN = 1,
+    STATUS_YELLOW = 2,
+    STATUS_RED = 3,
+};
+inline void status(const char*, StatusLevel) {}
 
 class ScopedSpan {
   public:

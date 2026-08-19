@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use mole_codec::catalog::Catalog;
 use crate::store::{LogStore, Retention, RowKind};
 use crate::span::SpanStore;
+use crate::state::{StateStore, StatusStore};
 use crate::watch::WatchStore;
 use mole_codec::frame::{decode_wire, SeqTracker};
 use mole_codec::record::Record;
@@ -34,7 +35,12 @@ pub struct Pipeline {
     pub logs: LogStore,
     pub watches: WatchStore,
     pub spans: SpanStore,
+    pub states: StateStore,
+    pub statuses: StatusStore,
     pub commands: Vec<CmdInfo>,
+    /// t absoluto (µs) del último record visto: el "ahora" del stream, para
+    /// duraciones (tiempo en un estado) sin mezclar el reloj de la PC
+    pub last_t_us: u64,
     last_dropped_seen: u32,
     seq: SeqTracker,
     pub counts: Counts,
@@ -50,7 +56,10 @@ impl Pipeline {
             logs: LogStore::new(Retention::default()),
             watches: WatchStore::new(crate::watch::DEFAULT_HISTORY),
             spans: SpanStore::default(),
+            states: StateStore::default(),
+            statuses: StatusStore::default(),
             commands: Vec::new(),
+            last_t_us: 0,
             last_dropped_seen: 0,
             seq: SeqTracker::new(),
             counts: Counts::default(),
@@ -109,6 +118,7 @@ impl Pipeline {
 
     fn apply(&mut self, t_us: u64, rec: Record) {
         let _ = self.catalog.apply(&rec);
+        self.last_t_us = self.last_t_us.max(t_us);
         match &rec {
             Record::Stats(s) => {
                 self.counts.mcu_enqueued = s.enqueued;
@@ -138,6 +148,12 @@ impl Pipeline {
             }
             Record::SpanAbort { span_id, .. } => {
                 self.spans.push_abort(*span_id);
+            }
+            Record::State { machine_sym, state_sym } => {
+                self.states.push(*machine_sym, *state_sym, t_us);
+            }
+            Record::Status { sym, level } => {
+                self.statuses.push(*sym, *level, t_us);
             }
             Record::CmdDef { cmd_id, sym, arg_type, min, max } => {
                 let info = CmdInfo {

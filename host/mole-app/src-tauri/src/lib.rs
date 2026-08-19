@@ -447,6 +447,26 @@ fn demo_start(state: AppState, rate: u32) -> Result<String, String> {
                     .unwrap_or_default(),
             );
         }
+        // FSM y LEDs del demo: máquina 7, estados 8..10 (parent 7), leds 11/12
+        defs.push(
+            Record::SymDef { sym_id: 7, kind: 8, parent: 0, name: b"radio_fsm".to_vec() }
+                .encode(0, &reg)
+                .unwrap_or_default(),
+        );
+        for (id, name) in [(8u16, &b"IDLE"[..]), (9, b"JOINING"), (10, b"JOINED")] {
+            defs.push(
+                Record::SymDef { sym_id: id, kind: 9, parent: 7, name: name.to_vec() }
+                    .encode(0, &reg)
+                    .unwrap_or_default(),
+            );
+        }
+        for (id, name) in [(11u16, &b"link"[..]), (12, b"sensor")] {
+            defs.push(
+                Record::SymDef { sym_id: id, kind: 0, parent: 0, name: name.to_vec() }
+                    .encode(0, &reg)
+                    .unwrap_or_default(),
+            );
+        }
         defs.push(
             Record::CmdDef { cmd_id: 1, sym: 5, arg_type: 0, min: None, max: None }
                 .encode(0, &reg)
@@ -526,6 +546,23 @@ fn demo_start(state: AppState, rate: u32) -> Result<String, String> {
                 p(Record::SpanEnd { span_id: build }, (600 + jitter) as u16);
                 p(Record::SpanEnd { span_id: tx }, (2500 + jitter + outlier) as u16);
             }
+            // FSM y LEDs: transición cada ~500 ms, status cada ~2 s
+            {
+                let batch = t_us / 20_000;
+                let mut p = |rec: Record, dt: u16| {
+                    if let Ok(b) = rec.encode(dt, &reg) {
+                        recs.push(b);
+                    }
+                };
+                if batch % 25 == 0 {
+                    let state_sym = [8u16, 9, 10, 10][((batch / 25) % 4) as usize];
+                    p(Record::State { machine_sym: 7, state_sym }, 0);
+                }
+                if batch % 100 == 0 {
+                    p(Record::Status { sym: 11, level: 1 }, 0);
+                    p(Record::Status { sym: 12, level: ((batch / 100) % 4) as u8 }, 0);
+                }
+            }
             // en frames de a 200 (PR-04 los limita por tamaño igual)
             for chunk in recs.chunks(200) {
                 if let Ok((_, wire)) = encode_frame(seq, t_us, 0, chunk) {
@@ -558,6 +595,31 @@ fn span_snapshot(state: AppState) -> Result<Vec<serde_json::Value>, String> {
             let mut v = serde_json::to_value(&r).unwrap_or_default();
             v["name"] = serde_json::json!(name);
             v
+        })
+        .collect())
+}
+
+/// Tabla interina de FEAT-24: estado vigente por máquina. La duración se
+/// mide contra el "ahora" del stream (last_t_us), no el reloj de la PC.
+#[tauri::command]
+fn state_snapshot(state: AppState) -> Result<Vec<serde_json::Value>, String> {
+    let p = state.pipeline.lock().map_err(|e| e.to_string())?;
+    let name = |sym: u16| {
+        p.catalog
+            .sym(sym)
+            .map(|s| String::from_utf8_lossy(&s.name).into_owned())
+            .unwrap_or_else(|| format!("#{sym}"))
+    };
+    Ok(p.states
+        .snapshot()
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "machine": name(m.machine_sym),
+                "state": name(m.state_sym),
+                "inStateUs": p.last_t_us.saturating_sub(m.since_us),
+                "transitions": m.transitions,
+            })
         })
         .collect())
 }
@@ -684,6 +746,7 @@ pub fn run() {
             source_close,
             detach_panel,
             span_snapshot,
+            state_snapshot,
             command_list,
             send_command,
             source_desc

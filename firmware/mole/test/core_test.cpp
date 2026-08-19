@@ -309,6 +309,43 @@ static void test_spsc_concurrente() {
     CHECK(s.enqueued + s.dropped == kTotal);
 }
 
+static void test_state_y_status() {
+    mole::detail::reset_for_tests();
+    mole::state("link_fsm", "JOINING");
+    mole::state("link_fsm", "JOINED");
+    mole::status("radio", mole::STATUS_GREEN);
+
+    // catálogo: máquina kind 8, estados kind 9 con parent = máquina (CAT-04)
+    mole::detail::MetaView mv;
+    uint8_t buf[255];
+    CHECK(mole::detail::meta_pop(&mv, buf));  // link_fsm → sym 1
+    CHECK(mv.type == mole::REC_SYM_DEF);
+    CHECK(mv.payload[2] == mole::KIND_MACHINE);
+    CHECK(mole::detail::meta_pop(&mv, buf));  // JOINING → sym 2
+    CHECK(mv.payload[2] == mole::KIND_STATE);
+    CHECK(mole::get_u16(mv.payload + 3) == 1);  // parent = link_fsm
+    CHECK(mole::detail::meta_pop(&mv, buf));  // JOINED → sym 3
+    CHECK(mole::get_u16(mv.payload + 3) == 1);
+    CHECK(mole::detail::meta_pop(&mv, buf));  // radio → sym 4, sin tipo
+    CHECK(mv.payload[2] == 0);
+
+    // records: dos REC_STATE {machine, state} y un REC_STATUS {sym, level}
+    uint8_t type, len;
+    uint64_t t;
+    CHECK(mole::detail::ring_pop_slot(0, &type, &t, buf, &len));
+    CHECK(type == mole::REC_STATE);
+    CHECK(len == 4);
+    CHECK(mole::get_u16(buf) == 1);
+    CHECK(mole::get_u16(buf + 2) == 2);
+    CHECK(mole::detail::ring_pop_slot(0, &type, &t, buf, &len));
+    CHECK(mole::get_u16(buf + 2) == 3);
+    CHECK(mole::detail::ring_pop_slot(0, &type, &t, buf, &len));
+    CHECK(type == mole::REC_STATUS);
+    CHECK(len == 3);
+    CHECK(mole::get_u16(buf) == 4);
+    CHECK(buf[2] == mole::STATUS_GREEN);
+}
+
 // ---------------------------------------------------------------------------
 // F1-T04: macros de log diferido
 // ---------------------------------------------------------------------------
@@ -1038,6 +1075,7 @@ int main() {
     test_decimate_bajo_presion();
     test_isr_ring();
     test_spsc_concurrente();
+    test_state_y_status();
     test_log_fmt_def_y_record();
     test_log_tag_y_filtro_en_productor();
     test_cadenas_literal_vs_runtime();

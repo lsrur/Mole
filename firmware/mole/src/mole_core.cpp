@@ -760,6 +760,37 @@ void event(const char* name, uint32_t arg) {
     detail::ring_push(REC_EVENT, payload, 6);
 }
 
+void state(const char* machine, const char* st) {
+    if (port::in_isr()) {
+        core().counter_lost_isr.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    const SymId m = intern(machine, KIND_MACHINE);
+    if (m == kSymOverflow) return;
+    // el estado cuelga de su máquina (CAT-04): el host reconstruye la
+    // relación aunque el record también lleve ambos símbolos (§7.8)
+    const SymId s = intern(st, KIND_STATE, m);
+    if (s == kSymOverflow) return;
+    uint8_t payload[4];
+    put_u16(payload, m);
+    put_u16(payload + 2, s);
+    detail::ring_push(REC_STATE, payload, 4);
+}
+
+void status(const char* name, StatusLevel level) {
+    if (port::in_isr()) {
+        core().counter_lost_isr.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    // sin kind propio en CAT-03: kind 0 ("sin tipo"), igual que event()
+    const SymId sym = intern(name, static_cast<SymKind>(0));
+    if (sym == kSymOverflow) return;
+    uint8_t payload[3];
+    put_u16(payload, sym);
+    payload[2] = static_cast<uint8_t>(level);
+    detail::ring_push(REC_STATUS, payload, 3);
+}
+
 // ---------------------------------------------------------------------------
 // Spans (REC-18..21)
 // ---------------------------------------------------------------------------
