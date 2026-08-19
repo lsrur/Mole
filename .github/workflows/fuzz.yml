@@ -1,0 +1,34 @@
+name: fuzz-nightly
+
+# TEST-03: fuzzing continuo del pipeline de decodificación. Los runners de
+# GitHub limitan un job a 6 h, así que cada noche corre una tanda de 4 h con
+# corpus acumulativo (el cache conserva la cobertura ganada entre corridas).
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Instalar cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Restaurar corpus acumulado
+        uses: actions/cache@v4
+        with:
+          path: host/fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      - name: Fuzz 4 horas
+        run: cargo +nightly fuzz run decode_frame -- -max_total_time=14400 -print_final_stats=1
+        working-directory: host
+      - name: Subir artefactos de crash
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: host/fuzz/artifacts
