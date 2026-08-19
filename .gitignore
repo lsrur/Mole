@@ -2,3 +2,7 @@
 /host/target/
 /firmware/mole/test/build/
 __pycache__/
+/firmware/mole/examples/bench/build/
+/firmware/mole/examples/bench/sdkconfig
+/firmware/mole/examples/bench/sdkconfig.old
+/firmware/mole/examples/bench/dependencies.lock

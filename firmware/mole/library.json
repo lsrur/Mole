@@ -1,0 +1,15 @@
+{
+  "name": "mole",
+  "version": "2.0.0-dev",
+  "description": "Prototipado interactivo y debugging de firmware ESP32: logs diferidos de alto volumen, watch, counters, dumps y control bidireccional sin recompilar.",
+  "keywords": ["esp32", "debug", "logging", "telemetry", "profiling"],
+  "repository": { "type": "git", "url": "https://github.com/lsrur/Mole.git" },
+  "license": "MIT",
+  "frameworks": ["espidf", "arduino"],
+  "platforms": ["espressif32"],
+  "build": {
+    "srcDir": "src",
+    "includeDir": "include",
+    "flags": ["-Isrc"]
+  }
+}

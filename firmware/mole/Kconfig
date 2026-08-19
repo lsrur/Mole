@@ -1,0 +1,46 @@
+menu "Mole"
+
+    config MOLE_ENABLED
+        bool "Habilitar instrumentacion Mole"
+        default y
+        help
+            Con esto apagado, todas las macros compilan a nada (FW-12):
+            sin strings ni simbolos en el binario.
+
+    config MOLE_MAX_SYMBOLS
+        int "Maximo de simbolos del catalogo"
+        default 512
+        help
+            CAT-05. Al desbordar, intern() devuelve SYM_OVERFLOW y se
+            contabiliza; nunca se reintenta en loop.
+
+    config MOLE_RING_SIZE
+        int "Ring buffer por tarea productora (bytes)"
+        default 4096
+
+    config MOLE_ISR_RING_SIZE
+        int "Ring buffer de ISR (bytes)"
+        default 1024
+
+    config MOLE_MAX_PRODUCERS
+        int "Maximo de tareas productoras"
+        default 8
+
+    config MOLE_FRAME_MAX
+        int "Tamano maximo de frame pre-COBS (bytes)"
+        default 4096
+        range 512 4096
+
+    config MOLE_FLUSH_MS
+        int "Cierre de frame por tiempo (ms)"
+        default 5
+        range 1 65
+
+    config MOLE_BLOCK_TIMEOUT_MS
+        int "Timeout de la politica Block (ms)"
+        default 10
+        help
+            FW-08: ningun productor bloquea mas que esto; despues descarta
+            y contabiliza. Un debugger no puede colgar el firmware.
+
+endmenu
