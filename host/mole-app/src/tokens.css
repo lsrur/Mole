@@ -148,10 +148,10 @@ button:active {
 }
 
 /* dockview mapeado a nuestros tokens: el chrome del dock (tabs, bordes,
-   sashes) sigue a data-theme igual que el resto. La clase base
-   dockview-theme-dark solo aporta lo no cromático (iconos, sombras);
-   el selector doble le gana en especificidad. */
-.dock.dockview-theme-dark {
+   sashes) sigue a data-theme igual que el resto. dockview-core pone la
+   clase de tema en un elemento interno (via la prop theme), así que el
+   override apunta ahí; la clase base solo aporta lo no cromático. */
+.dock .dockview-theme-dark {
   --dv-background-color: var(--bg-0);
   --dv-group-view-background-color: var(--bg-1);
   --dv-tabs-and-actions-container-background-color: var(--bg-2);

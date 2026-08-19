@@ -165,6 +165,11 @@ function fmtRate(n) {
   return String(n);
 }
 
+// sin la opción theme, dockview-core aplica themeAbyss a su elemento
+// interno y esas variables pisan las heredadas del contenedor; el color
+// real sale de los tokens (.dock .dockview-theme-dark en tokens.css)
+const moleDockTheme = { name: "mole", className: "dockview-theme-dark" };
+
 const linkClass = computed(() => {
   const tk = tick.value;
   if (!tk || source.value.kind === "none") return "link-bad";
@@ -245,8 +250,7 @@ const linkClass = computed(() => {
     </div>
 
     <div class="center">
-      <!-- el color real sale de los tokens (.dock.dockview-theme-dark) -->
-      <DockviewVue class="dock dockview-theme-dark" @ready="onDockReady" />
+      <DockviewVue class="dock" :theme="moleDockTheme" @ready="onDockReady" />
     </div>
 
     <div class="statusbar">
