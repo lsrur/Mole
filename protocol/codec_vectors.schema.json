@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/lsrur/mole/protocol/codec_vectors.schema.json",
+  "title": "Mole v2 codec vectors",
+  "description": "Formato de codec_vectors.json (mole-f0-plan.md §4). Los vectores son la fuente compartida de tests entre el codec de Rust y el de C++; ninguna implementación tiene su propio set.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "generated_by", "vectors"],
+  "properties": {
+    "protocol_version": { "const": 2 },
+    "generated_by": { "type": "string", "minLength": 1 },
+    "vectors": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/vector" }
+    }
+  },
+  "$defs": {
+    "hex": {
+      "description": "Bytes en hex: minúsculas, sin separadores, sin prefijo, longitud par (V-6).",
+      "type": "string",
+      "pattern": "^([0-9a-f]{2})*$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "mustFail": {
+      "description": "Motivo enumerado de rechazo (V-6).",
+      "enum": [
+        "crc_mismatch",
+        "cobs_invalid",
+        "cobs_underrun",
+        "len_overflow",
+        "truncated",
+        "unknown_type",
+        "arg_count_mismatch",
+        "depth_exceeded"
+      ]
+    },
+    "argType": {
+      "description": "Tipos de argumento de log (REC-37/REC-38/REC-44).",
+      "enum": ["i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64", "bool", "str", "sym", "struct"]
+    },
+    "arg": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "v"],
+      "properties": {
+        "t": { "$ref": "#/$defs/argType" },
+        "v": {},
+        "bits_hex": { "$ref": "#/$defs/hex" },
+        "type_id": { "type": "integer", "minimum": 0, "maximum": 65535 }
+      },
+      "if": { "properties": { "t": { "enum": ["f32", "f64"] } } },
+      "then": { "required": ["bits_hex"] }
+    },
+    "recordType": {
+      "description": "Nombre de la tabla de §7.1 o PR-18 (downlink); entero crudo para tipos desconocidos (must_fail: unknown_type).",
+      "oneOf": [
+        {
+          "enum": [
+            "REC_SESSION", "REC_SYM_DEF", "REC_STATS", "REC_PONG", "REC_FMT_DEF", "REC_TYPE_DEF",
+            "REC_LOG", "REC_LOG_FMT", "REC_WATCH", "REC_WATCH_STR", "REC_BIND_DEF", "REC_BIND_VAL",
+            "REC_DUMP", "REC_SCHEMA_DEF", "REC_SPAN_BEGIN", "REC_SPAN_END", "REC_SPAN_ABORT",
+            "REC_COUNTER", "REC_STATE", "REC_STATUS", "REC_CHECK_FAIL", "REC_EVENT", "REC_CMD_DEF",
+            "REC_BLOB_BEGIN", "REC_BLOB_CHUNK", "REC_PAUSED", "REC_RESUMED",
+            "CTL_HELLO", "CTL_CMD", "CTL_BIND_SET", "CTL_PAUSE", "CTL_RESUME", "CTL_STEP",
+            "CTL_RESET", "CTL_SET_LEVEL", "CTL_SET_POLICY", "CTL_PING"
+          ]
+        },
+        { "type": "integer", "minimum": 0, "maximum": 255 }
+      ]
+    },
+    "frameFlag": { "enum": ["CATALOG", "DROPS", "PAUSED"] },
+    "vector": {
+      "type": "object",
+      "required": ["id", "layer"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "layer": { "enum": ["cobs", "crc32", "record", "frame", "args", "catalog"] },
+        "desc": { "type": "string" },
+        "anchor": {
+          "description": "true si es uno de los 12 vectores ancla verificados por anchors.py (V-2).",
+          "type": "boolean"
+        },
+        "must_fail": { "$ref": "#/$defs/mustFail" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "layer": { "const": "cobs" } } },
+          "then": {
+            "properties": {
+              "decoded_hex": { "$ref": "#/$defs/hex" },
+              "encoded_hex": { "$ref": "#/$defs/hex" }
+            },
+            "if": { "not": { "required": ["must_fail"] } },
+            "then": { "required": ["decoded_hex", "encoded_hex"] },
+            "else": { "required": ["encoded_hex"] }
+          }
+        },
+        {
+          "if": { "properties": { "layer": { "const": "crc32" } } },
+          "then": {
+            "required": ["data_hex", "crc_hex"],
+            "properties": {
+              "data_hex": { "$ref": "#/$defs/hex" },
+              "crc_hex": { "$ref": "#/$defs/hex", "minLength": 8, "maxLength": 8 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "layer": { "const": "frame" } } },
+          "then": {
+            "properties": {
+              "frame": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["ver", "flags", "seq", "t_base_us", "records"],
+                "properties": {
+                  "ver": { "type": "integer", "minimum": 0, "maximum": 15 },
+                  "flags": { "type": "array", "items": { "$ref": "#/$defs/frameFlag" }, "uniqueItems": true },
+                  "seq": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                  "t_base_us": { "type": "integer", "minimum": 0 },
+                  "records": {
+                    "description": "Referencias por id a vectores de layer record (V-6).",
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/id" }
+                  }
+                }
+              },
+              "pre_cobs_hex": { "$ref": "#/$defs/hex" },
+              "wire_hex": { "$ref": "#/$defs/hex" }
+            },
+            "if": { "not": { "required": ["must_fail"] } },
+            "then": { "required": ["frame", "pre_cobs_hex", "wire_hex"] },
+            "else": { "required": ["wire_hex"] }
+          }
+        },
+        {
+          "if": { "properties": { "layer": { "const": "record" } } },
+          "then": {
+            "properties": {
+              "record": {
+                "type": "object",
+                "required": ["type", "dt_us"],
+                "properties": {
+                  "type": { "$ref": "#/$defs/recordType" },
+                  "dt_us": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                  "args": { "type": "array", "items": { "$ref": "#/$defs/arg" } }
+                }
+              },
+              "bytes_hex": { "$ref": "#/$defs/hex" }
+            },
+            "if": { "not": { "required": ["must_fail"] } },
+            "then": { "required": ["record", "bytes_hex"] },
+            "else": { "required": ["bytes_hex"] }
+          }
+        },
+        {
+          "if": { "properties": { "layer": { "const": "args" } } },
+          "then": {
+            "properties": {
+              "args": { "type": "array", "items": { "$ref": "#/$defs/arg" } },
+              "arg_types_hex": {
+                "description": "arg_types tal como viajan en REC_FMT_DEF, incluido type_id inline tras 0xf0 (REC-44).",
+                "$ref": "#/$defs/hex"
+              },
+              "bytes_hex": { "$ref": "#/$defs/hex" }
+            },
+            "if": { "not": { "required": ["must_fail"] } },
+            "then": { "required": ["args", "bytes_hex"] },
+            "else": { "required": ["bytes_hex"] }
+          }
+        },
+        {
+          "if": { "properties": { "layer": { "const": "catalog" } } },
+          "then": {
+            "properties": {
+              "records": {
+                "description": "Secuencia de definiciones (por id) que construyen el estado de catálogo.",
+                "type": "array",
+                "items": { "$ref": "#/$defs/id" }
+              },
+              "expect": {
+                "description": "Estado esperado tras aplicar la secuencia (catalog_hash, símbolos, etc.).",
+                "type": "object"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
