@@ -8,7 +8,7 @@
 use crate::args::{decode_arg_types, encode_arg_types, decode_value, encode_value, ArgType, Value};
 use crate::error::DecodeError;
 use crate::rw::{put_str, put_u16, put_u32, Reader};
-use crate::types::{TypeDef, TypeRegistry};
+use crate::types::{EnumDef, TypeDef, TypeRegistry};
 use crate::wire::{self, WireType};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +55,7 @@ pub enum Record {
     Pong { nonce: u32 },
     FmtDef(FmtDef),
     TypeDef(TypeDef),
+    EnumDef(EnumDef),
     Log { level: u8, task_id: u8, core: u8, tag_sym: u16, file_sym: u16, line: u16, msg: Vec<u8> },
     LogFmt { level: u8, task_id: u8, core: u8, tag_sym: u16, fmt_id: u16, args_raw: Vec<u8> },
     Watch { sym: u16, value: Value },
@@ -127,6 +128,7 @@ impl Record {
             Record::Pong { .. } => REC_PONG,
             Record::FmtDef(_) => REC_FMT_DEF,
             Record::TypeDef(_) => REC_TYPE_DEF,
+            Record::EnumDef(_) => REC_ENUM_DEF,
             Record::Log { .. } => REC_LOG,
             Record::LogFmt { .. } => REC_LOG_FMT,
             Record::Watch { .. } => REC_WATCH,
@@ -210,6 +212,7 @@ impl Record {
                 put_str(&mut o, &f.fmt)?;
             }
             Record::TypeDef(t) => o = t.encode_payload()?,
+            Record::EnumDef(e) => o = e.encode_payload()?,
             Record::Log { level, task_id, core, tag_sym, file_sym, line, msg } => {
                 o.push(*level);
                 o.push(*task_id);
@@ -434,6 +437,7 @@ impl Record {
             // directo para no disparar el chequeo de sobrantes sobre un
             // Reader que quedó sin avanzar.
             REC_TYPE_DEF => return Ok(Record::TypeDef(TypeDef::decode_payload(payload)?)),
+            REC_ENUM_DEF => return Ok(Record::EnumDef(EnumDef::decode_payload(payload)?)),
             REC_LOG => Record::Log {
                 level: r.u8()?,
                 task_id: r.u8()?,

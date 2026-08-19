@@ -30,6 +30,10 @@
     { "id": "fmt-arg-faltante", "fmt": "a={} b={}", "args": [{ "t": "i32", "v": 1 }], "expected": "a=1 b={!arg1}", "must_fail": "arg_count_mismatch" },
     { "id": "fmt-spec-malformada", "fmt": "{:q}", "args": [{ "t": "i32", "v": 1 }], "expected": "{!spec}" },
     { "id": "fmt-llave-sin-cerrar", "fmt": "x={", "args": [], "expected": "x={!fmt}" },
-    { "id": "fmt-struct", "fmt": "s={}", "args": [{ "t": "struct", "type_id": 1, "fields": [{ "t": "u8", "v": 17 }, { "t": "u16", "v": 8755 }] }], "syms": { "2": "a", "3": "b" }, "types": [{ "type_id": 1, "name": "Sens", "fields": [{ "name_sym": 2, "wire": "u8" }, { "name_sym": 3, "wire": "u16" }] }], "expected": "s=Sens{a=17, b=8755}" }
+    { "id": "fmt-struct", "fmt": "s={}", "args": [{ "t": "struct", "type_id": 1, "fields": [{ "t": "u8", "v": 17 }, { "t": "u16", "v": 8755 }] }], "syms": { "2": "a", "3": "b" }, "types": [{ "type_id": 1, "name": "Sens", "fields": [{ "name_sym": 2, "wire": "u8" }, { "name_sym": 3, "wire": "u16" }] }], "expected": "s=Sens{a=17, b=8755}" },
+    { "id": "fmt-enum-nombre", "fmt": "modo={}", "args": [{ "t": "enum", "type_id": 7, "wire": "u8", "v": 1 }], "enums": { "7": { "1": "AVG" } }, "expected": "modo=AVG", "comment": "REC-41: enum descripto, por nombre" },
+    { "id": "fmt-enum-sin-descriptor", "fmt": "modo={}", "args": [{ "t": "enum", "type_id": 9, "wire": "u8", "v": 3 }], "expected": "modo=3", "comment": "REC-41: sin descriptor o valor fuera de rango, entero" },
+    { "id": "fmt-enum-base-hex", "fmt": "{:#x}", "args": [{ "t": "enum", "type_id": 7, "wire": "u8", "v": 1 }], "enums": { "7": { "1": "AVG" } }, "expected": "0x1", "comment": "con base explicita gana el entero" },
+    { "id": "fmt-array", "fmt": "ax={}", "args": [{ "t": "array", "elems": [{ "t": "f32", "bits_hex": "0000803f" }, { "t": "f32", "bits_hex": "00000040" }, { "t": "f32", "bits_hex": "00004040" }] }], "expected": "ax=[1, 2, 3]", "comment": "REC-54: arreglo con render por elemento" }
   ]
 }

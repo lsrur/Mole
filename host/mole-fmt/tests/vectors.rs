@@ -13,6 +13,7 @@ use serde_json::Value as Json;
 struct MapResolver {
     syms: HashMap<u16, String>,
     types: HashMap<u16, TypeDef>,
+    enums: HashMap<u16, HashMap<i64, String>>,
 }
 
 impl Resolver for MapResolver {
@@ -21,6 +22,9 @@ impl Resolver for MapResolver {
     }
     fn type_def(&self, type_id: u16) -> Option<&TypeDef> {
         self.types.get(&type_id)
+    }
+    fn enum_value_name(&self, type_id: u16, value: i64) -> Option<String> {
+        self.enums.get(&type_id)?.get(&value).cloned()
     }
 }
 
@@ -63,6 +67,16 @@ fn parse_arg(j: &Json) -> Value {
             type_id: j["type_id"].as_u64().unwrap() as u16,
             fields: j["fields"].as_array().unwrap().iter().map(parse_arg).collect(),
         },
+        "enum" => Value::Enum {
+            type_id: j["type_id"].as_u64().unwrap() as u16,
+            wire: match j["wire"].as_str().unwrap() {
+                "u8" => WireType::U8,
+                "i32" => WireType::I32,
+                other => panic!("base de enum {other} no soportada en fmt_vectors"),
+            },
+            value: j["v"].as_i64().unwrap(),
+        },
+        "array" => Value::Array(j["elems"].as_array().unwrap().iter().map(parse_arg).collect()),
         other => panic!("tipo de arg desconocido en vector: {other}"),
     }
 }
@@ -110,7 +124,17 @@ fn parse_resolver(j: &Json) -> MapResolver {
             );
         }
     }
-    MapResolver { syms, types }
+    let mut enums = HashMap::new();
+    if let Some(map) = j.get("enums").and_then(|s| s.as_object()) {
+        for (type_id, entries) in map {
+            let mut inner = HashMap::new();
+            for (value, name) in entries.as_object().unwrap() {
+                inner.insert(value.parse::<i64>().unwrap(), name.as_str().unwrap().to_string());
+            }
+            enums.insert(type_id.parse::<u16>().unwrap(), inner);
+        }
+    }
+    MapResolver { syms, types, enums }
 }
 
 #[test]

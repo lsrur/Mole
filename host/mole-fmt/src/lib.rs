@@ -12,6 +12,10 @@ use mole_codec::types::TypeDef;
 pub trait Resolver {
     fn sym_name(&self, sym_id: u16) -> Option<String>;
     fn type_def(&self, type_id: u16) -> Option<&TypeDef>;
+    /// Nombre de un valor de enum descripto (REC-41/REC-53); `None` ⇒ entero.
+    fn enum_value_name(&self, _type_id: u16, _value: i64) -> Option<String> {
+        None
+    }
 }
 
 /// Resolver vacío: los símbolos se muestran como `<sym#N>`.
@@ -33,6 +37,10 @@ impl Resolver for mole_codec::catalog::Catalog {
     }
     fn type_def(&self, type_id: u16) -> Option<&TypeDef> {
         self.types.get(type_id)
+    }
+    fn enum_value_name(&self, type_id: u16, value: i64) -> Option<String> {
+        let name_sym = self.types.get_enum(type_id)?.name_sym_of(value)?;
+        self.sym_name(name_sym)
     }
 }
 
@@ -224,6 +232,22 @@ fn render_value(v: &Value, spec: &Spec, res: &dyn Resolver) -> String {
             None => Some(pad(format!("0x{p:08x}"), spec)),
         },
         Value::Struct { type_id, fields } => Some(render_struct(*type_id, fields, spec, res)),
+        Value::Enum { type_id, value, .. } => match spec.ty {
+            // con base explícita se formatea el entero
+            Some(_) => render_int(&Value::I64(*value), spec),
+            None => Some(pad(
+                res.enum_value_name(*type_id, *value)
+                    .unwrap_or_else(|| value.to_string()),
+                spec,
+            )),
+        },
+        Value::Array(elems) => {
+            let parts: Vec<String> = elems
+                .iter()
+                .map(|e| render_value(e, &Spec::default(), res))
+                .collect();
+            Some(pad(format!("[{}]", parts.join(", ")), spec))
+        }
         _ => render_int(v, spec),
     };
     rendered.unwrap_or_else(|| "{!spec}".to_string())

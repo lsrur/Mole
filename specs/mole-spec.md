@@ -1,6 +1,6 @@
 ---
 doc: mole-spec.md
-version: 2.0.0-draft.10
+version: 2.0.0-draft.11
 fecha: 2026-08-18
 estado: BORRADOR — para debate
 alcance: protocolo + librería de firmware + aplicación desktop
@@ -23,6 +23,7 @@ compatibilidad: NINGUNA con v1.x (ruptura deliberada y total)
 | 2.0.0-draft.8 | 2026-08-18 | Correcciones de wire previas a F0, surgidas de la revisión del plan (mecanismo Q-5): `span_id` pasa a **contador global** de instancias con regla de stale en el host (REC-21); nuevo `flags: u8` por campo en `REC_TYPE_DEF`, bit 0 = big-endian — el MCU nunca invierte, el host invierte al decodificar (REC-43/REC-45, resuelve Q-2 del plan de F0); §7.10 reescrita: los checks usan **formateo diferido**, `REC_CHECK_FAIL` pasa a `{ fmt_id, task_id, core, args[] }`. Retoques editoriales: FEAT-05 (costo en régimen cero) y PLAT-04 (framework de UI remite a PA-12). §6 y §7 quedan **congeladas en este draft**. |
 | 2.0.0-draft.9 | 2026-08-18 | Huecos encontrados al calcular los vectores ancla (mecanismo Q-5, T-03): **PR-20** — todo `char[]` lleva prefijo de longitud `u8`, uniforme; `REC_SESSION` totalmente tipado (CAT-09); payload de `REC_STATE` definido (§7.8); **REC-52** — valores numéricos del enum de tipos de wire; números asignados a `SymKind` (CAT-03), niveles de status (§7.8), scopes de pausa (FW-20), políticas de backpressure (PR-12) y motivos de pausa/reanudación (FW-18, REC-20); `REC_RESUMED` gana `reason: u8` (FW-18 ya lo exigía); `REC_PAUSED` renombra `sym`→`file_sym`. §6 y §7 quedan **congeladas en este draft**. |
 | 2.0.0-draft.10 | 2026-08-18 | Última tanda de huecos mecánicos (Q-5, implementación del codec): opcodes de downlink asignados (0xC0–0xC9, PR-18); payload de `REC_SCHEMA_DEF` definido (REC-50); algoritmo de `catalog_hash` fijado como CRC32 incremental sobre payloads de definiciones (CAT-08); dimensionado de `min[]/max[]/step[]` en `REC_BIND_DEF`/`REC_CMD_DEF` (REC-10/REC-29), con `arg_type=0` = comando sin argumento. §6 y §7 quedan **congeladas en este draft**. |
+| 2.0.0-draft.11 | 2026-08-18 | Cierra los dos huecos de la capa de structs hallados al armar la matriz de vectores: **REC-53** — nuevo record `REC_ENUM_DEF` (0x07) con pares valor→nombre, referenciado por `flags` bit 2 + `ref_type` en campos y por el tag `0xF1` en `arg_types`; **REC-54** — `flags` bit 1 = campo arreglo (solo elementos escalares en v2, `count = size / tamaño(wire)`). REC-41/REC-43/REC-44/REC-46/REC-52/CAT-08 actualizadas. Vectores regenerados. §6 y §7 quedan **congeladas en este draft**. |
 
 ## Convenciones del documento
 
@@ -273,7 +274,7 @@ Criterios de aceptación medibles. Cada uno tiene un test asociado en §15.
 
 ## 6. Framing y protocolo
 
-> **CONGELADO en draft.10.** Todo cambio a §6 o §7 a partir de acá requiere versión menor nueva y actualización de los vectores de TEST-01.
+> **CONGELADO en draft.11.** Todo cambio a §6 o §7 a partir de acá requiere versión menor nueva y actualización de los vectores de TEST-01.
 
 ### 6.1 Capas
 
@@ -367,7 +368,7 @@ El costo en régimen es un `load` de una variable estática. Para uso en templat
 
 **CAT-07** — Al arrancar, el firmware genera un `epoch: u32` (contador en RTC memory, o aleatorio si no está disponible). El `epoch` identifica unívocamente un arranque.
 
-**CAT-08** — El firmware mantiene un `catalog_hash: u32` incremental sobre todas las definiciones emitidas. Algoritmo: CRC32 (PR-03) acumulado sobre los **payloads** de cada `REC_SYM_DEF`, `REC_FMT_DEF`, `REC_TYPE_DEF` y `REC_SCHEMA_DEF`, concatenados en orden de emisión (el estado del CRC se arrastra de una definición a la siguiente).
+**CAT-08** — El firmware mantiene un `catalog_hash: u32` incremental sobre todas las definiciones emitidas. Algoritmo: CRC32 (PR-03) acumulado sobre los **payloads** de cada `REC_SYM_DEF`, `REC_FMT_DEF`, `REC_TYPE_DEF`, `REC_ENUM_DEF` y `REC_SCHEMA_DEF`, concatenados en orden de emisión (el estado del CRC se arrastra de una definición a la siguiente).
 
 **CAT-09** — Handshake:
 
@@ -446,6 +447,7 @@ El argumento de `CTL_CMD`/`CTL_BIND_SET` se codifica según su tipo (REC-52); la
 | 0x04 | `REC_PONG` | meta | `{ nonce: u32 }` |
 | 0x05 | `REC_FMT_DEF` | meta | §7.2 |
 | 0x06 | `REC_TYPE_DEF` | meta | §7.2.4 |
+| 0x07 | `REC_ENUM_DEF` | meta | §7.2.4, REC-53 |
 | 0x10 | `REC_LOG` | log | §7.2 — formateado en MCU (fallback) |
 | 0x11 | `REC_LOG_FMT` | log | §7.2 — formateo diferido (default) |
 | 0x20 | `REC_WATCH` | watch | §7.3 |
@@ -535,6 +537,7 @@ Es la única situación en la que el camino caliente hace una copia. Se detecta 
 | 0x0D | `str` — cadena de runtime | 1 + len (PR-20) |
 | 0x0E | `ptr` | 4 (dirección) |
 | 0xF0 | `struct` | ver REC-44/REC-45 |
+| 0xF1 | `enum` — solo como tag de `arg_types` | entero base + `type_id` inline (REC-53) |
 
 #### 7.2.4 Logueo de structs
 
@@ -560,7 +563,7 @@ MOLE_WARN(imu, "fuera de rango {:#} umbral={:.1}", s, thr);
 // {:#} → renderizado expandido como tabla en el panel de log
 ```
 
-**REC-41** — Los enums descriptos se renderizan por nombre (`AVG`), no por valor (`1`). Un enum sin descriptor se renderiza como entero.
+**REC-41** — Los enums descriptos se renderizan por nombre (`AVG`), no por valor (`1`). Un enum sin descriptor —o un valor fuera de las entradas— se renderiza como entero, siempre. El mecanismo de wire está en REC-53.
 
 **REC-42** — Implementación: `MOLE_DESCRIBE` genera una función libre `constexpr` hallada por ADL, que devuelve un `TypeDesc` con nombre, tipo wire, `offsetof` y `sizeof` de cada campo. Con eso `wire_type_v<T>` resuelve a `Struct` y el tipo entra al sistema de argumentos como cualquier `int`. No hay herencia, ni virtuales, ni registro global en tiempo de arranque.
 
@@ -568,9 +571,9 @@ MOLE_WARN(imu, "fuera de rango {:#} umbral={:.1}", s, thr);
 
 `{ type_id: u16, name: char[], nfields: u8, fields: [{ name_sym: u16, wire: u8, flags: u8, offset: u16, size: u16, ref_type: u16 }] }`
 
-`flags` por campo: bit 0 = **big-endian** (lo marcan `MOLE_DESCRIBE_BE` y el sufijo `be` del DSL, REC-50); bits 1–7 reservados, DEBEN emitirse en cero y el host DEBE ignorarlos.
+`flags` por campo: bit 0 = **big-endian** (lo marcan `MOLE_DESCRIBE_BE` y el sufijo `be` del DSL, REC-50); bit 1 = **arreglo** (REC-54); bit 2 = **enum** (REC-53, `ref_type` = `type_id` del enum); bits 3–7 reservados, DEBEN emitirse en cero y el host DEBE ignorarlos.
 
-**REC-44** — En `REC_FMT_DEF`, el tipo de argumento `0xF0 = Struct` va seguido inline de los 2 bytes del `type_id`. En `REC_LOG_FMT` viajan **solo los valores de los campos**, empaquetados. El costo en el wire es idéntico a loguear los campos sueltos, menos los `{}` del format string.
+**REC-44** — En `REC_FMT_DEF`, el tipo de argumento `0xF0 = Struct` va seguido inline de los 2 bytes del `type_id`. Análogamente, `0xF1 = Enum` (REC-53) va seguido del `type_id` del enum; en `REC_LOG_FMT` viaja solo el entero base. En `REC_LOG_FMT` viajan **solo los valores de los campos**, empaquetados. El costo en el wire es idéntico a loguear los campos sueltos, menos los `{}` del format string.
 
 **REC-45** — **Dos modos de empaquetado, con semántica distinta:**
 
@@ -590,12 +593,24 @@ Campos big-endian (flag bit 0, REC-43): **el MCU nunca invierte bytes**. En los 
 | Caso | Tratamiento |
 |---|---|
 | Struct anidado | El campo referencia otro `type_id`; resolución recursiva, profundidad máxima 4 |
-| Arreglo (`float ax[3]`) | Requiere `MOLE_FIELD_ARRAY`; `offsetof`+`sizeof` no distinguen arreglo de blob |
+| Arreglo (`float ax[3]`) | Requiere `MOLE_FIELD_ARRAY` (`flags` bit 1, REC-54); `offsetof`+`sizeof` solos no distinguen arreglo de blob |
 | `const char*` como campo | El host decodifica **secuencialmente, no por offset**, para todo el struct |
 | Puntero | Se renderiza como dirección hex. Resolución a símbolo queda para v3 (V3-01) |
 | Empaquetado > 255 bytes | Se promueve a blob (§7.9) o se trunca con flag. Nunca en silencio |
 
 **REC-47** — El filtro `enabled(lvl, tag)` corre **antes** de empaquetar. Un struct grande en un tag silenciado cuesta cero. Es la razón por la que FEAT-03 importa más con structs que con escalares.
+
+**REC-53** — **Enums por nombre.** `MOLE_DESCRIBE_ENUM` emite, con registro perezoso (como REC-43), un `REC_ENUM_DEF`:
+
+`{ type_id: u16, name: str, wire: u8, nentries: u8, entries: [{ value: <tamaño de wire>, name_sym: u16 }] }`
+
+- El `type_id` comparte espacio con los structs: un solo registro de tipos en el host.
+- `wire` declara el entero base (REC-52); los `value` de las entradas se dimensionan con él.
+- Referencias: en un campo de struct, `flags` bit 2 con `ref_type` = `type_id`; como argumento suelto de log, tag `0xF1` en `arg_types` seguido del `type_id` inline (REC-44). En el wire viaja siempre el entero base pelado.
+- La definición DEBE caber en un solo record; la macro lo verifica en compilación. Un enum que no entra no es un caso de esta herramienta.
+- `REC_WATCH`/`REC_BIND_VAL` de un enum se renderizan como entero en v2: su valor auto-descripto no lleva referencia de tipo. Se revisa si molesta en la práctica.
+
+**REC-54** — **Campos arreglo.** `MOLE_FIELD_ARRAY` marca `flags` bit 1. La cantidad se deriva: `count = size / tamaño(wire)` (REC-52); un `size` no divisible o cero invalida el descriptor. El modo valores empaqueta `count` elementos secuenciales; el bit big-endian aplica por elemento; el modo bytes no cambia. **Solo elementos escalares en v2**: un arreglo de structs o de cadenas es error de compilación (el descriptor no transporta el `sizeof` en memoria de un struct anidado, y adivinarlo es peor que restringir).
 
 **REC-48** — **Escotilla de escape sin descriptor:**
 

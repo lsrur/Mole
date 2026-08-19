@@ -11,8 +11,8 @@ use mole_codec::catalog::Catalog;
 use mole_codec::error::DecodeError;
 use mole_codec::frame::{decode_wire, encode_frame};
 use mole_codec::record::{FmtDef, Record, Session, Stats};
-use mole_codec::types::{FieldDef, TypeDef, TypeRegistry};
-use mole_codec::wire::{WireType, FIELD_FLAG_BE};
+use mole_codec::types::{EnumDef, FieldDef, TypeDef, TypeRegistry};
+use mole_codec::wire::{WireType, FIELD_FLAG_ARRAY, FIELD_FLAG_BE, FIELD_FLAG_ENUM};
 use mole_codec::{cobs, crc32::crc32};
 use serde_json::{json, Map, Value as J};
 
@@ -178,6 +178,18 @@ fn typedefs() -> Vec<(String, TypeDef)> {
             ],
         },
     ));
+    // draft.11: struct con campo arreglo y campo enum (REC-53/REC-54)
+    out.push((
+        "rec-type-def-imu".into(),
+        TypeDef {
+            type_id: 6,
+            name: b"Imu".to_vec(),
+            fields: vec![
+                FieldDef { name_sym: 43, wire: WireType::F32, flags: FIELD_FLAG_ARRAY, offset: 0, size: 12, ref_type: 0 },
+                FieldDef { name_sym: 44, wire: WireType::U8, flags: FIELD_FLAG_ENUM, offset: 12, size: 1, ref_type: 7 },
+            ],
+        },
+    ));
     // cadena de profundidad: D1→D2→D3→D4 (válida) y E1→..→E5 (excede)
     for (i, id) in (11u16..=14).enumerate() {
         let last = id == 14;
@@ -225,12 +237,23 @@ fn typedef_json(t: &TypeDef) -> J {
     })
 }
 
+/// El enum descripto que usan los vectores draft.11 (REC-53).
+fn mode_enum() -> EnumDef {
+    EnumDef {
+        type_id: 7,
+        name: b"Mode".to_vec(),
+        wire: WireType::U8,
+        entries: vec![(0, 40), (1, 41), (2, 42)], // RAW, AVG, MEDIAN
+    }
+}
+
 pub fn build() -> J {
     let reg_all = {
         let mut r = TypeRegistry::new();
         for (_, t) in typedefs() {
             r.insert(t);
         }
+        r.insert_enum(mode_enum());
         r
     };
     let mut v: Vec<J> = Vec::new();
@@ -351,10 +374,23 @@ pub fn build() -> J {
             "rec-type-def" => "REC-43 draft.9: descriptor con flags; el campo b es big-endian",
             "rec-type-def-padding-final" => "struct {u16;u8} con padding al final (sizeof 4, campos hasta el 3)",
             "rec-type-def-con-str" => "struct con cadena de runtime adentro: fuerza decodificacion secuencial (REC-46)",
+            "rec-type-def-imu" => "draft.11: campo arreglo (flags bit 1, f32[3]) y campo enum (flags bit 2, ref_type 7)",
             _ => "descriptor auxiliar para vectores de structs",
         };
         v.push(rec_vec(&id, desc, 0, &Record::TypeDef(t.clone()), typedef_json(&t), anchor));
     }
+    let me = mode_enum();
+    v.push(rec_vec(
+        "rec-enum-def",
+        "REC-53 (draft.11): pares valor->nombre de Mode, base u8",
+        0,
+        &Record::EnumDef(me.clone()),
+        json!({"type": "REC_ENUM_DEF", "type_id": 7, "name": "Mode", "wire": "u8",
+               "nentries": 3,
+               "entries": [{"value": 0, "name_sym": 40}, {"value": 1, "name_sym": 41},
+                            {"value": 2, "name_sym": 42}]}),
+        false,
+    ));
     v.push(rec_vec(
         "rec-log",
         "REC_LOG fallback (REC-36), formateado en el MCU",
@@ -846,6 +882,32 @@ pub fn build() -> J {
         false,
     ));
     v.push(args_vec(
+        "args-struct-arreglo-enum",
+        "draft.11: Imu{ax=f32[3], mode=Mode}; el arreglo empaqueta count elementos, el enum su entero base",
+        &[ArgType::Struct(6)],
+        &[Value::Struct {
+            type_id: 6,
+            fields: vec![
+                Value::Array(vec![Value::F32(1.0), Value::F32(2.0), Value::F32(3.0)]),
+                Value::Enum { type_id: 7, wire: WireType::U8, value: 1 },
+            ],
+        }],
+        json!([{"t": "struct", "type_id": 6, "v": {"ax": [1.0, 2.0, 3.0], "mode": "AVG"}}]),
+        &reg_all,
+        &["rec-type-def-imu", "rec-enum-def"],
+        false,
+    ));
+    v.push(args_vec(
+        "args-enum-suelto",
+        "draft.11: enum como argumento de log via tag 0xF1 + type_id inline (REC-53)",
+        &[ArgType::Enum(7)],
+        &[Value::Enum { type_id: 7, wire: WireType::U8, value: 1 }],
+        json!([{"t": "enum", "type_id": 7, "v": 1}]),
+        &reg_all,
+        &["rec-enum-def"],
+        false,
+    ));
+    v.push(args_vec(
         "args-struct-con-str",
         "struct con cadena de runtime adentro: decodificacion secuencial (REC-46)",
         &[ArgType::Struct(5)],
@@ -988,6 +1050,11 @@ pub fn build() -> J {
         "arg_types_hex": "06", "bytes_hex": "0102",
     }));
     v.push(json!({
+        "id": "fail-enum-sin-def", "layer": "args", "must_fail": "unknown_fmt",
+        "desc": "tag 0xF1 con type_id que nunca se definio (draft.11)",
+        "arg_types_hex": "f16300", "bytes_hex": "01",
+    }));
+    v.push(json!({
         "id": "fail-struct-prof-5", "layer": "args", "must_fail": "depth_exceeded",
         "desc": "struct anidado a profundidad 5 (REC-46: maximo 4)",
         "arg_types_hex": "f01500", "bytes_hex": "42",
@@ -1014,8 +1081,10 @@ fn registry_from_requires(doc: &J, requires: &[&str]) -> TypeRegistry {
             .unwrap_or_else(|| panic!("requires apunta a vector inexistente: {req}"));
         let bytes = unhex(vec["bytes_hex"].as_str().unwrap());
         let payload = &bytes[4..];
-        if let Ok(Record::TypeDef(t)) = Record::decode_payload(bytes[0], payload, &reg) {
-            reg.insert(t);
+        match Record::decode_payload(bytes[0], payload, &reg) {
+            Ok(Record::TypeDef(t)) => reg.insert(t),
+            Ok(Record::EnumDef(e)) => reg.insert_enum(e),
+            _ => {}
         }
     }
     reg
@@ -1202,13 +1271,13 @@ pub fn validate(doc: &J) -> Vec<String> {
     fails
 }
 
-/// Cuenta cuántos args describe un `arg_types_hex` (0xF0 consume 2 extra).
+/// Cuenta cuántos args describe un `arg_types_hex` (0xF0/0xF1 consumen 2 extra).
 fn count_arg_types(th: &[u8]) -> usize {
     let mut n = 0;
     let mut i = 0;
     while i < th.len() {
         n += 1;
-        i += if th[i] == 0xF0 { 3 } else { 1 };
+        i += if th[i] == 0xF0 || th[i] == 0xF1 { 3 } else { 1 };
     }
     n
 }

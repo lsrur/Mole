@@ -3,6 +3,23 @@
   "generated_by": "mole-vectors 0.1.0",
   "vectors": [
     {
+      "id": "args-enum-suelto",
+      "layer": "args",
+      "desc": "draft.11: enum como argumento de log via tag 0xF1 + type_id inline (REC-53)",
+      "arg_types_hex": "f10700",
+      "args": [
+        {
+          "t": "enum",
+          "type_id": 7,
+          "v": 1
+        }
+      ],
+      "bytes_hex": "01",
+      "requires": [
+        "rec-enum-def"
+      ]
+    },
+    {
       "id": "args-floats-especiales",
       "layer": "args",
       "desc": "NaN, +Inf, -Inf, -0.0 y subnormal, bits exactos",
@@ -176,6 +193,31 @@
       "requires": [
         "rec-type-def-interno",
         "rec-type-def-anidado"
+      ]
+    },
+    {
+      "id": "args-struct-arreglo-enum",
+      "layer": "args",
+      "desc": "draft.11: Imu{ax=f32[3], mode=Mode}; el arreglo empaqueta count elementos, el enum su entero base",
+      "arg_types_hex": "f00600",
+      "args": [
+        {
+          "t": "struct",
+          "type_id": 6,
+          "v": {
+            "ax": [
+              1.0,
+              2.0,
+              3.0
+            ],
+            "mode": "AVG"
+          }
+        }
+      ],
+      "bytes_hex": "0000803f000000400000404001",
+      "requires": [
+        "rec-type-def-imu",
+        "rec-enum-def"
       ]
     },
     {
@@ -554,6 +596,14 @@
       "must_fail": "crc_mismatch",
       "desc": "un bit alterado en el cuerpo: CRC32 no coincide",
       "wire_hex": "0302010440420f010101010202045102fa02060420070a020502090107c03f53257235"
+    },
+    {
+      "id": "fail-enum-sin-def",
+      "layer": "args",
+      "must_fail": "unknown_fmt",
+      "desc": "tag 0xF1 con type_id que nunca se definio (draft.11)",
+      "arg_types_hex": "f16300",
+      "bytes_hex": "01"
     },
     {
       "id": "fail-len-overflow",
@@ -1142,6 +1192,34 @@
       "bytes_hex": "40174d000b000000003b0000000102030405060708090a0b0c0d0e"
     },
     {
+      "id": "rec-enum-def",
+      "layer": "record",
+      "desc": "REC-53 (draft.11): pares valor->nombre de Mode, base u8",
+      "record": {
+        "type": "REC_ENUM_DEF",
+        "type_id": 7,
+        "name": "Mode",
+        "wire": "u8",
+        "nentries": 3,
+        "entries": [
+          {
+            "value": 0,
+            "name_sym": 40
+          },
+          {
+            "value": 1,
+            "name_sym": 41
+          },
+          {
+            "value": 2,
+            "name_sym": 42
+          }
+        ],
+        "dt_us": 0
+      },
+      "bytes_hex": "071200000700044d6f64650103002800012900022a00"
+    },
+    {
       "id": "rec-event",
       "layer": "record",
       "desc": "marca puntual con argumento (FEAT-23)",
@@ -1646,6 +1724,37 @@
         "dt_us": 0
       },
       "bytes_hex": "0610000019000245350100000100000001000000"
+    },
+    {
+      "id": "rec-type-def-imu",
+      "layer": "record",
+      "desc": "draft.11: campo arreglo (flags bit 1, f32[3]) y campo enum (flags bit 2, ref_type 7)",
+      "record": {
+        "type": "REC_TYPE_DEF",
+        "type_id": 6,
+        "name": "Imu",
+        "nfields": 2,
+        "fields": [
+          {
+            "name_sym": 43,
+            "wire": "f32",
+            "flags": 2,
+            "offset": 0,
+            "size": 12,
+            "ref_type": 0
+          },
+          {
+            "name_sym": 44,
+            "wire": "u8",
+            "flags": 4,
+            "offset": 12,
+            "size": 1,
+            "ref_type": 7
+          }
+        ],
+        "dt_us": 0
+      },
+      "bytes_hex": "061b0000060003496d75022b00090200000c0000002c0001040c0001000700"
     },
     {
       "id": "rec-type-def-interno",

@@ -158,6 +158,21 @@ static bool rebuild_payload(bytes& o, const json& rec) {
       put16(o, f.at("size"));
       put16(o, f.at("ref_type"));
     }
+  } else if (t == "REC_ENUM_DEF") {
+    put16(o, rec.at("type_id"));
+    put_str(o, rec.at("name"));
+    const uint8_t base = kWireByName.at(rec.at("wire").get<std::string>());
+    o.push_back(base);
+    o.push_back(rec.at("nentries").get<uint8_t>());
+    const size_t esize = mole::wire_fixed_size(base);
+    for (const auto& e : rec.at("entries")) {
+      uint64_t u = static_cast<uint64_t>(e.at("value").get<int64_t>());
+      for (size_t i = 0; i < esize; i++) {
+        o.push_back(static_cast<uint8_t>(u & 0xFF));
+        u >>= 8;
+      }
+      put16(o, e.at("name_sym"));
+    }
   } else if (t == "REC_STATE") {
     put16(o, rec.at("machine_sym"));
     put16(o, rec.at("state_sym"));
@@ -197,17 +212,27 @@ static bool rebuild_payload(bytes& o, const json& rec) {
 
 struct FieldD {
   uint8_t wire, flags;
-  uint16_t ref_type;
+  uint16_t size, ref_type;
 };
 using TypeMap = std::map<uint16_t, std::vector<FieldD>>;
+using EnumMap = std::map<uint16_t, uint8_t>;  // type_id → wire base (draft.11)
 
 // error: "" ok, o nombre must_fail
 static std::string walk_value(uint8_t wire, uint16_t type_id, const bytes& b,
-                              size_t& pos, size_t depth, const TypeMap& types) {
+                              size_t& pos, size_t depth, const TypeMap& types,
+                              const EnumMap& enums) {
   if (wire == mole::WIRE_STR) {
     if (pos >= b.size()) return "arg_count_mismatch";
     const size_t n = b[pos];
     pos += 1 + n;
+    if (pos > b.size()) return "arg_count_mismatch";
+    return "";
+  }
+  if (wire == mole::kArgTagEnum) {
+    // enum suelto: el entero base sale de la definición (REC-53)
+    const auto it = enums.find(type_id);
+    if (it == enums.end()) return "unknown_fmt";
+    pos += mole::wire_fixed_size(it->second);
     if (pos > b.size()) return "arg_count_mismatch";
     return "";
   }
@@ -216,8 +241,17 @@ static std::string walk_value(uint8_t wire, uint16_t type_id, const bytes& b,
     const auto it = types.find(type_id);
     if (it == types.end()) return "unknown_fmt";
     for (const auto& f : it->second) {
+      if (f.flags & mole::kFieldFlagArray) {
+        // REC-54: count = size / tamaño(wire), solo escalares
+        const size_t elem = mole::wire_fixed_size(f.wire);
+        if (elem == 0 || f.size == 0 || f.size % elem != 0) return "arg_count_mismatch";
+        pos += f.size / elem * elem;
+        if (pos > b.size()) return "arg_count_mismatch";
+        continue;
+      }
+      // un campo enum avanza por su entero base: mismo camino que un escalar
       const std::string e =
-          walk_value(f.wire, f.ref_type, b, pos, depth + 1, types);
+          walk_value(f.wire, f.ref_type, b, pos, depth + 1, types, enums);
       if (!e.empty()) return e;
     }
     return "";
@@ -230,17 +264,17 @@ static std::string walk_value(uint8_t wire, uint16_t type_id, const bytes& b,
 }
 
 static std::string walk_args(const bytes& arg_types, const bytes& payload,
-                             const TypeMap& types) {
+                             const TypeMap& types, const EnumMap& enums) {
   size_t pos = 0;
   size_t i = 0;
   while (i < arg_types.size()) {
     const uint8_t tag = arg_types[i++];
     uint16_t type_id = 0;
-    if (tag == mole::WIRE_STRUCT) {
+    if (tag == mole::WIRE_STRUCT || tag == mole::kArgTagEnum) {
       type_id = mole::get_u16(arg_types.data() + i);
       i += 2;
     }
-    const std::string e = walk_value(tag, type_id, payload, pos, 0, types);
+    const std::string e = walk_value(tag, type_id, payload, pos, 0, types, enums);
     if (!e.empty()) return e;
   }
   if (pos != payload.size()) return "arg_count_mismatch";
@@ -258,11 +292,20 @@ static void apply_typedef(TypeMap& types, const bytes& payload) {
     FieldD f{};
     f.wire = payload[p + 2];
     f.flags = payload[p + 3];
+    f.size = mole::get_u16(payload.data() + p + 6);
     f.ref_type = mole::get_u16(payload.data() + p + 8);
     fields.push_back(f);
     p += 10;
   }
   types[type_id] = fields;
+}
+
+// Parsea un payload de REC_ENUM_DEF al EnumMap (draft.11).
+static void apply_enumdef(EnumMap& enums, const bytes& payload) {
+  size_t p = 2;
+  const uint16_t type_id = mole::get_u16(payload.data());
+  p += 1 + payload[p];  // name
+  enums[type_id] = payload[p];  // wire base
 }
 
 // ---------------------------------------------------------------------------
@@ -394,13 +437,19 @@ int main(int argc, char** argv) {
       const bytes types_b = unhex(v["arg_types_hex"]);
       const bytes payload = unhex(v["bytes_hex"]);
       TypeMap types;
+      EnumMap enums;
       if (v.contains("requires")) {
         for (const auto& rid : v["requires"]) {
           const bytes rb = unhex(by_id.at(rid)["bytes_hex"]);
-          apply_typedef(types, bytes(rb.begin() + 4, rb.end()));
+          const bytes pl(rb.begin() + 4, rb.end());
+          if (rb[0] == mole::REC_ENUM_DEF) {
+            apply_enumdef(enums, pl);
+          } else {
+            apply_typedef(types, pl);
+          }
         }
       }
-      const std::string e = walk_args(types_b, payload, types);
+      const std::string e = walk_args(types_b, payload, types, enums);
       g_checked++;
       if (e != mf) fail(id, "esperaba '" + mf + "', obtuve '" + e + "'");
     } else if (layer == "catalog") {

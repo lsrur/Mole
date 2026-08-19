@@ -4,7 +4,7 @@ Herramienta de prototipado interactivo y debugging de firmware ESP32: librería 
 
 ## Autoridad
 
-- `specs/mole-spec.md` (v2.0.0-draft.8) es **la autoridad**. §6 (framing/protocolo) y §7 (records) están **CONGELADAS**: si algo del formato no cierra, no se parchea el código — se abre una nota, se corrige la spec en un draft nuevo y se regeneran los vectores (Q-5 del plan).
+- `specs/mole-spec.md` (la versión vigente está en su frontmatter) es **la autoridad**. §6 (framing/protocolo) y §7 (records) están **CONGELADAS**: si algo del formato no cierra, no se parchea el código — se abre una nota, se corrige la spec en un draft nuevo y se regeneran los vectores (Q-5 del plan).
 - `specs/mole-f0-plan.md` es el plan en ejecución (tareas T-01..T-16).
 - Ante ambigüedad entre spec y plan, gana la spec. Si la spec es ambigua, **parar y preguntar**, no elegir una interpretación y seguir.
 

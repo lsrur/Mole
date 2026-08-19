@@ -21,6 +21,7 @@ pub const REC_STATS: u8 = 0x03;
 pub const REC_PONG: u8 = 0x04;
 pub const REC_FMT_DEF: u8 = 0x05;
 pub const REC_TYPE_DEF: u8 = 0x06;
+pub const REC_ENUM_DEF: u8 = 0x07;
 pub const REC_LOG: u8 = 0x10;
 pub const REC_LOG_FMT: u8 = 0x11;
 pub const REC_WATCH: u8 = 0x20;
@@ -196,3 +197,10 @@ pub enum SymKind {
 
 /// Bit 0 de `flags` por campo en `REC_TYPE_DEF` (draft.9): big-endian.
 pub const FIELD_FLAG_BE: u8 = 0x01;
+/// Bit 1 (draft.11, REC-54): campo arreglo, `count = size / tamaño(wire)`.
+pub const FIELD_FLAG_ARRAY: u8 = 0x02;
+/// Bit 2 (draft.11, REC-53): campo enum, `ref_type` = type_id del enum.
+pub const FIELD_FLAG_ENUM: u8 = 0x04;
+/// Tag de `arg_types` para un enum suelto (draft.11, REC-53): sigue el
+/// `type_id` inline, como 0xF0 para structs.
+pub const ARG_TAG_ENUM: u8 = 0xF1;

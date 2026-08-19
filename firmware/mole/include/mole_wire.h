@@ -33,6 +33,7 @@ enum RecType : uint8_t {
   REC_PONG = 0x04,
   REC_FMT_DEF = 0x05,
   REC_TYPE_DEF = 0x06,
+  REC_ENUM_DEF = 0x07,
   REC_LOG = 0x10,
   REC_LOG_FMT = 0x11,
   REC_WATCH = 0x20,
@@ -136,7 +137,12 @@ enum SymKind : uint8_t {
   KIND_SCHEMA = 12,
 };
 
-// Bit 0 de flags por campo en REC_TYPE_DEF (draft.9): big-endian.
-inline constexpr uint8_t kFieldFlagBE = 0x01;
+// Flags por campo en REC_TYPE_DEF (draft.9/draft.11).
+inline constexpr uint8_t kFieldFlagBE = 0x01;     // big-endian
+inline constexpr uint8_t kFieldFlagArray = 0x02;  // REC-54: count = size/tamaño(wire)
+inline constexpr uint8_t kFieldFlagEnum = 0x04;   // REC-53: ref_type = type_id del enum
+
+// Tag de arg_types para un enum suelto (draft.11): sigue el type_id inline.
+inline constexpr uint8_t kArgTagEnum = 0xF1;
 
 }  // namespace mole

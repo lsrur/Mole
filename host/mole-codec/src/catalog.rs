@@ -57,6 +57,11 @@ impl Catalog {
                 self.types.insert(t.clone());
                 Ok(true)
             }
+            Record::EnumDef(e) => {
+                self.feed_hash(rec)?;
+                self.types.insert_enum(e.clone());
+                Ok(true)
+            }
             Record::SchemaDef { .. } => {
                 self.feed_hash(rec)?;
                 Ok(true)

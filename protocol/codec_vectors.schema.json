@@ -41,7 +41,7 @@
     },
     "argType": {
       "description": "Tipos de argumento de log (REC-37/REC-38/REC-44).",
-      "enum": ["i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64", "bool", "str", "sym", "struct"]
+      "enum": ["i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64", "bool", "str", "sym", "struct", "enum"]
     },
     "arg": {
       "type": "object",
@@ -69,7 +69,7 @@
       "oneOf": [
         {
           "enum": [
-            "REC_SESSION", "REC_SYM_DEF", "REC_STATS", "REC_PONG", "REC_FMT_DEF", "REC_TYPE_DEF",
+            "REC_SESSION", "REC_SYM_DEF", "REC_STATS", "REC_PONG", "REC_FMT_DEF", "REC_TYPE_DEF", "REC_ENUM_DEF",
             "REC_LOG", "REC_LOG_FMT", "REC_WATCH", "REC_WATCH_STR", "REC_BIND_DEF", "REC_BIND_VAL",
             "REC_DUMP", "REC_SCHEMA_DEF", "REC_SPAN_BEGIN", "REC_SPAN_END", "REC_SPAN_ABORT",
             "REC_COUNTER", "REC_STATE", "REC_STATUS", "REC_CHECK_FAIL", "REC_EVENT", "REC_CMD_DEF",

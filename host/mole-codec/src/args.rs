@@ -7,7 +7,7 @@
 use crate::error::DecodeError;
 use crate::rw::{put_str, Reader};
 use crate::types::TypeRegistry;
-use crate::wire::{WireType, MAX_STRUCT_DEPTH};
+use crate::wire::{WireType, ARG_TAG_ENUM, MAX_STRUCT_DEPTH};
 
 /// Un valor decodificado. Los floats conservan el patrón de bits exacto
 /// (NaN con payload incluido); las cadenas conservan los bytes crudos y el
@@ -31,6 +31,11 @@ pub enum Value {
     Str(Vec<u8>),
     Ptr(u32),
     Struct { type_id: u16, fields: Vec<Value> },
+    /// Campo arreglo (REC-54, draft.11): elementos escalares homogéneos.
+    Array(Vec<Value>),
+    /// Enum descripto (REC-53, draft.11). `wire` es el entero base; el valor
+    /// viaja como ese entero. El nombre se resuelve al renderizar.
+    Enum { type_id: u16, wire: WireType, value: i64 },
 }
 
 impl Value {
@@ -51,6 +56,10 @@ impl Value {
             Value::Str(_) => WireType::Str,
             Value::Ptr(_) => WireType::Ptr,
             Value::Struct { .. } => WireType::Struct,
+            // arrays y enums solo existen dentro de structs o via arg_types;
+            // no tienen representación auto-descripta (watch/bind, REC-53)
+            Value::Array(v) => v.first().map(Value::wire_type).unwrap_or(WireType::U8),
+            Value::Enum { wire, .. } => *wire,
         }
     }
 }
@@ -61,6 +70,8 @@ impl Value {
 pub enum ArgType {
     Scalar(WireType),
     Struct(u16),
+    /// Enum suelto (REC-53): tag 0xF1 + type_id inline.
+    Enum(u16),
 }
 
 /// Decodifica la lista `arg_types` de un `REC_FMT_DEF`.
@@ -68,6 +79,10 @@ pub fn decode_arg_types(r: &mut Reader, argc: usize) -> Result<Vec<ArgType>, Dec
     let mut out = Vec::with_capacity(argc.min(32));
     for _ in 0..argc {
         let tag = r.u8()?;
+        if tag == ARG_TAG_ENUM {
+            out.push(ArgType::Enum(r.u16()?));
+            continue;
+        }
         let wt = WireType::from_u8(tag).ok_or(DecodeError::Truncated)?;
         if wt == WireType::Struct {
             out.push(ArgType::Struct(r.u16()?));
@@ -87,8 +102,48 @@ pub fn encode_arg_types(out: &mut Vec<u8>, types: &[ArgType]) {
                 out.push(WireType::Struct.to_u8());
                 out.extend_from_slice(&type_id.to_le_bytes());
             }
+            ArgType::Enum(type_id) => {
+                out.push(ARG_TAG_ENUM);
+                out.extend_from_slice(&type_id.to_le_bytes());
+            }
         }
     }
+}
+
+/// Lee el entero base de un enum y lo devuelve con signo extendido.
+fn decode_enum_int(
+    wire: WireType,
+    r: &mut Reader,
+    big_endian: bool,
+) -> Result<i64, DecodeError> {
+    Ok(match decode_scalar(wire, r, big_endian)? {
+        Value::U8(v) => v as i64,
+        Value::I8(v) => v as i64,
+        Value::U16(v) => v as i64,
+        Value::I16(v) => v as i64,
+        Value::U32(v) => v as i64,
+        Value::I32(v) => v as i64,
+        Value::U64(v) => v as i64,
+        Value::I64(v) => v,
+        _ => return Err(DecodeError::Truncated), // base no entera: descriptor inválido
+    })
+}
+
+/// Escribe el entero base de un enum.
+fn encode_enum_int(
+    wire: WireType,
+    value: i64,
+    out: &mut Vec<u8>,
+    big_endian: bool,
+) -> Result<(), DecodeError> {
+    let elem = wire.fixed_size().ok_or(DecodeError::Truncated)?;
+    let bytes = value.to_le_bytes();
+    if big_endian {
+        out.extend(bytes[..elem].iter().rev());
+    } else {
+        out.extend_from_slice(&bytes[..elem]);
+    }
+    Ok(())
 }
 
 /// Decodifica un valor escalar (no struct) de tipo conocido.
@@ -172,6 +227,13 @@ pub fn decode_value(
 ) -> Result<Value, DecodeError> {
     match at {
         ArgType::Scalar(wt) => decode_scalar(wt, r, false),
+        ArgType::Enum(type_id) => {
+            // el tag 0xF1 no lleva el entero base: hace falta la definición
+            let def = reg.get_enum(type_id).ok_or(DecodeError::UnknownFmt)?;
+            let wire = def.wire;
+            let value = decode_enum_int(wire, r, false)?;
+            Ok(Value::Enum { type_id, wire, value })
+        }
         ArgType::Struct(type_id) => {
             if depth >= MAX_STRUCT_DEPTH {
                 return Err(DecodeError::DepthExceeded);
@@ -181,6 +243,21 @@ pub fn decode_value(
             for f in &def.fields {
                 let v = if f.wire == WireType::Struct {
                     decode_value(ArgType::Struct(f.ref_type), r, reg, depth + 1)?
+                } else if f.is_enum() {
+                    // el entero base es el wire del campo; la definición del
+                    // enum solo hace falta al renderizar (REC-41)
+                    Value::Enum {
+                        type_id: f.ref_type,
+                        wire: f.wire,
+                        value: decode_enum_int(f.wire, r, f.is_big_endian())?,
+                    }
+                } else if f.is_array() {
+                    let count = f.array_count()?;
+                    let mut elems = Vec::with_capacity(count.min(256));
+                    for _ in 0..count {
+                        elems.push(decode_scalar(f.wire, r, f.is_big_endian())?);
+                    }
+                    Value::Array(elems)
                 } else {
                     decode_scalar(f.wire, r, f.is_big_endian())?
                 };
@@ -218,7 +295,10 @@ fn encode_scalar(v: &Value, out: &mut Vec<u8>, big_endian: bool) -> Result<(), D
         Value::Sym(v) => int!(v),
         Value::Ptr(v) => int!(v),
         Value::Str(s) => put_str(out, s)?,
-        Value::Struct { .. } => return Err(DecodeError::Truncated), // via encode_value
+        // compuestos: siempre via encode_value, nunca como escalares sueltos
+        Value::Struct { .. } | Value::Array(_) | Value::Enum { .. } => {
+            return Err(DecodeError::Truncated)
+        }
     }
     Ok(())
 }
@@ -242,12 +322,33 @@ pub fn encode_value(
             for (f, v) in def.fields.iter().zip(fields) {
                 if f.wire == WireType::Struct {
                     encode_value(v, out, reg, depth + 1)?;
+                } else if f.is_enum() {
+                    match v {
+                        Value::Enum { wire, value, .. } => {
+                            encode_enum_int(*wire, *value, out, f.is_big_endian())?
+                        }
+                        _ => return Err(DecodeError::ArgCountMismatch),
+                    }
+                } else if f.is_array() {
+                    match v {
+                        Value::Array(elems) => {
+                            if elems.len() != f.array_count()? {
+                                return Err(DecodeError::ArgCountMismatch);
+                            }
+                            for e in elems {
+                                encode_scalar(e, out, f.is_big_endian())?;
+                            }
+                        }
+                        _ => return Err(DecodeError::ArgCountMismatch),
+                    }
                 } else {
                     encode_scalar(v, out, f.is_big_endian())?;
                 }
             }
             Ok(())
         }
+        Value::Enum { wire, value, .. } => encode_enum_int(*wire, *value, out, false),
+        Value::Array(_) => Err(DecodeError::ArgCountMismatch), // solo dentro de structs
         scalar => encode_scalar(scalar, out, false),
     }
 }

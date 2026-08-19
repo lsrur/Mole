@@ -371,10 +371,12 @@ FLAG_BY_NAME = {"CATALOG": 0x1, "DROPS": 0x2, "PAUSED": 0x4}
 REC_OPCODES = {
     "REC_SPAN_END": 0x51, "REC_SYM_DEF": 0x02, "REC_FMT_DEF": 0x05,
     "REC_LOG_FMT": 0x11, "REC_WATCH": 0x20, "REC_TYPE_DEF": 0x06,
-    "REC_STATE": 0x70, "REC_STATUS": 0x71, "REC_EVENT": 0x81,
-    "REC_SPAN_BEGIN": 0x50, "REC_SPAN_ABORT": 0x52, "REC_PONG": 0x04,
-    "REC_PAUSED": 0xF0, "REC_RESUMED": 0xF1,
+    "REC_ENUM_DEF": 0x07, "REC_STATE": 0x70, "REC_STATUS": 0x71,
+    "REC_EVENT": 0x81, "REC_SPAN_BEGIN": 0x50, "REC_SPAN_ABORT": 0x52,
+    "REC_PONG": 0x04, "REC_PAUSED": 0xF0, "REC_RESUMED": 0xF1,
 }
+WIRE_SIZES = {"u8": 1, "i8": 1, "u16": 2, "i16": 2, "u32": 4, "i32": 4,
+              "u64": 8, "i64": 8, "f32": 4, "f64": 8, "bool": 1}
 
 
 def rebuild_arg_bytes(args_json):
@@ -432,6 +434,14 @@ def rebuild_record(rec):
         for f in rec["fields"]:
             body += (u16(f["name_sym"]) + u8(WIRE_BY_NAME[f["wire"]]) + u8(f["flags"])
                      + u16(f["offset"]) + u16(f["size"]) + u16(f["ref_type"]))
+        return body
+    if t == "REC_ENUM_DEF":
+        body = u16(rec["type_id"]) + s(rec["name"]) + u8(WIRE_BY_NAME[rec["wire"]])
+        body += u8(rec["nentries"])
+        size = WIRE_SIZES[rec["wire"]]
+        for e in rec["entries"]:
+            body += int(e["value"]).to_bytes(size, "little", signed=e["value"] < 0)
+            body += u16(e["name_sym"])
         return body
     if t == "REC_STATE":
         return u16(rec["machine_sym"]) + u16(rec["state_sym"])
