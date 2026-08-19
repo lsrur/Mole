@@ -1,6 +1,6 @@
 ---
 doc: mole-spec.md
-version: 2.0.0-draft.11
+version: 2.0.0-draft.12
 fecha: 2026-08-18
 estado: BORRADOR — para debate
 alcance: protocolo + librería de firmware + aplicación desktop
@@ -24,6 +24,7 @@ compatibilidad: NINGUNA con v1.x (ruptura deliberada y total)
 | 2.0.0-draft.9 | 2026-08-18 | Huecos encontrados al calcular los vectores ancla (mecanismo Q-5, T-03): **PR-20** — todo `char[]` lleva prefijo de longitud `u8`, uniforme; `REC_SESSION` totalmente tipado (CAT-09); payload de `REC_STATE` definido (§7.8); **REC-52** — valores numéricos del enum de tipos de wire; números asignados a `SymKind` (CAT-03), niveles de status (§7.8), scopes de pausa (FW-20), políticas de backpressure (PR-12) y motivos de pausa/reanudación (FW-18, REC-20); `REC_RESUMED` gana `reason: u8` (FW-18 ya lo exigía); `REC_PAUSED` renombra `sym`→`file_sym`. §6 y §7 quedan **congeladas en este draft**. |
 | 2.0.0-draft.10 | 2026-08-18 | Última tanda de huecos mecánicos (Q-5, implementación del codec): opcodes de downlink asignados (0xC0–0xC9, PR-18); payload de `REC_SCHEMA_DEF` definido (REC-50); algoritmo de `catalog_hash` fijado como CRC32 incremental sobre payloads de definiciones (CAT-08); dimensionado de `min[]/max[]/step[]` en `REC_BIND_DEF`/`REC_CMD_DEF` (REC-10/REC-29), con `arg_type=0` = comando sin argumento. §6 y §7 quedan **congeladas en este draft**. |
 | 2.0.0-draft.11 | 2026-08-18 | Cierra los dos huecos de la capa de structs hallados al armar la matriz de vectores: **REC-53** — nuevo record `REC_ENUM_DEF` (0x07) con pares valor→nombre, referenciado por `flags` bit 2 + `ref_type` en campos y por el tag `0xF1` en `arg_types`; **REC-54** — `flags` bit 1 = campo arreglo (solo elementos escalares en v2, `count = size / tamaño(wire)`). REC-41/REC-43/REC-44/REC-46/REC-52/CAT-08 actualizadas. Vectores regenerados. §6 y §7 quedan **congeladas en este draft**. |
+| 2.0.0-draft.12 | 2026-08-19 | Resueltos **PA-12** (Vue 3 + Ark UI + dockview + TanStack Virtual; PrimeVue afuera) y **PA-06** (descarte con aviso). **UI-08 revertida**: el árbol de splitters NO se hace a mano — el estimado de 300 líneas estaba errado en un orden de magnitud y dockview cubre UI-04..08 y FEAT-55/56, con caveat verificable del popout bajo Tauri. UI-44 concreta Ark UI. Nueva **UI-46**: tokens de diseño del aspecto desktop. §2.2 actualizada. Queda abierto solo PA-03. |
 
 ## Convenciones del documento
 
@@ -190,7 +191,7 @@ Enumeración completa de lo que la herramienta hace. Los códigos `FEAT-xx` son 
 
 ### 2.2 Desktop (PLAT-04)
 
-macOS (target de referencia), Linux y Windows. Rust + Tauri 2; el framework de UI se decide en F2 (PA-12, ver §10.9), con librería de componentes preferentemente headless (UI-44).
+macOS (target de referencia), Linux y Windows. Rust + Tauri 2 + **Vue 3**, con **dockview** (layout de paneles), **Ark UI** (capa fría headless) y **TanStack Virtual** (ventanas virtualizadas). Resuelto en PA-12; el aspecto desktop es trabajo de tokens propios (UI-46), no de librería de componentes.
 
 ---
 
@@ -1057,7 +1058,7 @@ Cambiar de preset es un atajo de teclado. Debuggear un sensor y perfilar una tar
 
 **UI-07** — Cualquier panel se desprende a una ventana propia. A diferencia de v1 —donde la ventana desprendida generaba **datos aleatorios con un mock** porque era un webview aislado— todas las ventanas consumen el mismo contrato de IPC (HOST-14).
 
-**UI-08** — El árbol de splitters se implementa **a mano**, no con un componente de librería. Son unas 300 líneas y necesitamos control fino sobre persistencia, pestañas, arrastre y desprendido. Es además el componente que menos conviene atar a una dependencia externa, porque define el esqueleto de todo.
+**UI-08** — El árbol de splitters se implementa con **dockview** (MIT, core en TypeScript puro sin dependencias de runtime, binding oficial de Vue): pestañas, grupos, drag & drop, paneles flotantes, ventanas desprendidas y serialización del layout. **Esto revierte una decisión deliberada del draft.7** ("a mano, ~300 líneas"): el estimado estaba errado en un orden de magnitud — un docking manager real con popout y serialización son miles de líneas — y existe exactamente la pieza necesaria, que cubre UI-04..08 y FEAT-55/56 de una vez. Caveat verificable antes de comprometer el diseño del desprendido: el popout de dockview mueve nodos DOM vía `window.open`, que bajo Tauri 2 puede no compartir documento entre webviews; si no funciona, FEAT-07 se implementa con una ventana Tauri propia sobre el mismo contrato de IPC (HOST-14 ya lo exige). Los CONTENIDOS de los paneles calientes siguen siendo a mano (UI-43): dockview da el chrome, no las tablas.
 
 ### 10.3 Estrategia de renderizado por panel
 
@@ -1169,7 +1170,7 @@ En la captura de v1 las 30 filas visibles dicen todas `21:34:29`: el timestamp t
 
 **UI-43** — **Los paneles calientes se escriben a mano, sin librería de UI.** Log, dump, spans, timeline, sparklines y el árbol de splitters. Es el ~30% de la superficie y el 95% del riesgo de performance.
 
-**UI-44** — La librería de UI solo se usa en la parte fría: barra superior, diálogos, preferencias, controles de formulario de los binds. Preferentemente **headless** (comportamiento y accesibilidad sin estilos impuestos), para que la densidad de UI-02 sea alcanzable sin pelear contra el CSS de la librería.
+**UI-44** — La librería de UI solo se usa en la parte fría: barra superior, diálogos, preferencias, controles de formulario de los binds. La elegida es **Ark UI** (headless, agnóstica de framework con paridad Vue/Svelte/Solid/React): comportamiento y accesibilidad sin estilos impuestos, para que la densidad de UI-02 sea alcanzable sin pelear contra el CSS de la librería. El scroller virtual usa **TanStack Virtual** (headless; `anchorTo: 'end'` y follow-on-append resuelven UI-19/UI-26), pero **no exime el scrollbar indexado de UI-25**: con 10M filas el alto virtual excede el límite del navegador igual — TanStack virtualiza la ventana, el mapeo posición→índice de la sesión completa es propio.
 
 **UI-45** — Requisitos que el framework DEBE cumplir:
 
@@ -1181,7 +1182,20 @@ En la captura de v1 las 30 filas visibles dicen todas `21:34:29`: el timestamp t
 | Runtime chico | Arranque del ejecutable |
 | Buen interop con canvas | Cuatro paneles son canvas |
 
-Candidatos evaluados: Svelte 5 (runes), SolidJS, Vue 3 con `shallowRef`. Los tres cumplen. React se descarta: su modelo de re-render es el peor encaje para actualizaciones de alta frecuencia. **Ver PA-12.**
+Candidatos evaluados: Svelte 5 (runes), SolidJS, Vue 3 con `shallowRef`. Los tres cumplen. React se descarta: su modelo de re-render es el peor encaje para actualizaciones de alta frecuencia. **Resuelto en PA-12: Vue 3** — ver §17.2.
+
+**UI-46** — **Tokens de diseño.** El aspecto de aplicación de escritorio no lo da ninguna librería de componentes (lo que existe fuera de React es headless o con estética de SaaS web): es trabajo de diseño propio sobre componentes sin estilo. La definición concreta:
+
+| Token | Valor |
+|---|---|
+| Tipografía | fuente de sistema (`-apple-system`/`Segoe UI`/`system-ui`); UI 12 px, paneles de datos 11–12 px mono (`ui-monospace`) |
+| Densidades de fila | compacto 18 px / normal 22 px / cómodo 28 px (UI-23) |
+| Paleta | bajo croma, tema oscuro por defecto (UI-01); acentos solo para estado (nivel de log, salud del enlace) |
+| Separación | bordes de 1 px, nada de sombras ni elevación |
+| Radios | 0 en paneles calientes y chrome; máximo 3–4 px en controles fríos |
+| Chrome | toolbar arriba, statusbar abajo, pestañas de dockview restyleadas con estos tokens |
+| Movimiento | cero transiciones/animaciones en paneles calientes (UI-11); las frías ≤120 ms |
+| Niveles de log | forma e ícono además de color (UI-41) |
 
 ---
 
@@ -1293,19 +1307,13 @@ Candidatos evaluados: Svelte 5 (runes), SolidJS, Vue 3 con `shallowRef`. Los tre
 
 **PA-03 — USB vendor bulk (TR-05).** ¿Se implementa desde el principio o se espera a medir CDC? Implica driver con `nusb` y, en Windows, instalación de WinUSB (fricción real para terceros).
 
-**PA-12 — Framework de UI.** Los tres candidatos cumplen UI-45 y la diferencia real entre ellos es menor que la diferencia entre una tabla hecha a mano y una de librería (UI-42). El criterio de desempate es de proyecto, no técnico:
-
-| Opción | A favor | En contra |
-|---|---|---|
-| **Svelte 5 (runes)** | Runtime mínimo, reactividad de grano fino, DX buena, sin VDOM | Corte con el stack del ERP; librerías headless jóvenes (Melt/Bits) |
-| **SolidJS** | El más rápido en actualizaciones quirúrgicas, señales que calzan exacto con el tick por deltas | Ecosistema chico, menos gente, JSX en un proyecto sin React |
-| **Vue 3 + `shallowRef`** | Fluidez ya adquirida, idiomas compartidos con el ERP | Hay que desactivar la reactividad profunda a mano; en v1 ya aparecían `triggerRef` manuales, señal de estar peleando con el framework |
-
-Recomendación: **Svelte 5** si se acepta el costo de contexto, porque es un proyecto nuevo sin restricciones de compatibilidad y los paneles calientes se escriben a mano de todas formas. **Vue 3** si se prioriza velocidad de arranque y compartir idiomas con el resto del trabajo. Decidir en F2, no antes: F0 y F1 no tocan UI.
-
-**PA-06 — Retención por defecto y spill a disco.** ¿Spill transparente (más complejo, nunca perdés nada) o descarte con aviso (simple, honesto)? Afecta PERF-10.
+(Solo queda abierto PA-03; se decide con el número real de PERF-04 en la mano, al cerrar el gate de F1.)
 
 ### 17.2 Resueltos
+
+**PA-12 — ~~Framework de UI.~~ RESUELTO (draft.12): Vue 3 + Ark UI + dockview + TanStack Virtual; PrimeVue afuera.** La investigación de estado del arte desarmó los dos argumentos que sostenían a Svelte: (1) la performance no desempata — por HOST-11 la UI recibe un tick coalescido a 30 Hz, no un evento por record, y los paneles calientes se escriben a mano igual (UI-43); (2) el aspecto desktop no lo da ningún framework — es trabajo de tokens propios (UI-46) en cualquier stack. Lo que quedó en pie: Vue es el único candidato donde las cuatro piezas (Ark UI, dockview, TanStack Virtual) tienen soporte de primera, y la familiaridad es un activo contra el riesgo real del proyecto (que un side project quede inconcluso otra vez en F2). El patrón `shallowRef`+`triggerRef` que en v1 parecía "pelear contra Vue" es el que usa el propio adaptador Vue de TanStack Virtual: es el patrón correcto para datos de alta frecuencia. Lo que se va no es Vue: es PrimeVue (el DataTable pesado ya estaba condenado por UI-43).
+
+**PA-06 — ~~Retención y spill.~~ RESUELTO (draft.12): descarte con aviso.** Al superar 10M records o 1 GB se descartan las páginas más viejas y la UI muestra desde cuándo hay datos. Coherente con PR-11 (pérdida visible, jamás silenciosa) y sin la complejidad del spill a mmap; el buffer circular a disco de F7 (SES-02) cubre "quiero lo de hace 10 minutos". Reversible: el store pagina desde el día uno — spill sería agregar un destino a las páginas viejas.
 
 **PA-01 — ~~Deferred formatting de logs.~~ RESUELTO (draft.4): a favor, con sintaxis de llaves.** El MCU emite `fmt_id` + argumentos binarios (`REC_LOG_FMT`) y el host formatea. Se elige `{}` sobre `printf` porque el tipo lo aporta C++ y no el string, lo que elimina la clase de bug del `%d` con float y hace que el formateador del host sea casi un mapeo directo al de Rust. Entra en **v2.0, no en v2.1**: agregarlo después no rompe el formato, pero obligaría a migrar todos los call sites ya escritos en el otro estilo. Costos aceptados: format string obligatoriamente literal, un formateador de runtime en Rust (~200 líneas, porque `format!` exige literal en compilación), instanciación de templates a vigilar en flash, y dos records de log conviviendo de forma permanente. Ver §7.2.
 
@@ -1346,7 +1354,9 @@ Para que no vuelvan a aparecer en un debate futuro:
 - Licencia dual o edición paga: todo MIT (PA-09).
 - Format strings estilo `printf` y formateo de logs en el MCU como camino por defecto (PA-01).
 - Escribir el layout de un struct dos veces: en la definición de C++ y en un string de schema (PA-04).
-- React como framework de UI: su modelo de re-render es el peor encaje para actualizaciones de alta frecuencia (UI-45).
+- React como framework de UI: su modelo de re-render es el peor encaje para actualizaciones de alta frecuencia (UI-45). Y con él, Blueprint: el atajo al look desktop no paga el peaje de React.
+- PrimeVue y todo componente de tabla de propósito general (PA-12, UI-43).
+- El árbol de splitters hecho a mano: revertido en draft.12 a favor de dockview (UI-08).
 - Renderizar el log en canvas: obliga a reimplementar selección, copiado, búsqueda y accesibilidad (UI-10).
 - Componentes de tabla de propósito general en los paneles calientes (UI-43).
 - Filtros escondidos detrás de un popup (UI-14).

@@ -1,9 +1,9 @@
 ---
 doc: mole-f2-plan.md
-version: 0.1.0
+version: 0.2.0
 fecha: 2026-08-19
-estado: BORRADOR — para debate
-depende_de: mole-spec.md v2.0.0-draft.11; F0 completo; F1 con gate de números pendiente de placa
+estado: PARA EJECUTAR (frente A ya; frente B con PA-12 resuelto; cierre formal con la placa)
+depende_de: mole-spec.md v2.0.0-draft.12; F0 completo; F1 con gate de números pendiente de placa
 ejecutor: Claude Code
 ---
 
@@ -14,6 +14,7 @@ ejecutor: Claude Code
 | Versión | Fecha | Cambios |
 |---|---|---|
 | 0.1.0 | 2026-08-19 | Borrador inicial. Abiertos: PA-12 (framework), PA-06 (retención). |
+| 0.2.0 | 2026-08-19 | PA-12 y PA-06 resueltos por spec draft.12: **Vue 3 + Ark UI + dockview + TanStack Virtual** y **descarte con aviso**. B-03 arranca con el spike del popout de dockview bajo Tauri; B-04 anota que TanStack no exime el scrollbar indexado (UI-25). Gate: frente A arranca ya; el cierre formal de F2 espera los números de F1. |
 
 ---
 
@@ -43,11 +44,11 @@ La spec es explícita: *F1 antes que cualquier UI*. Interpretación operativa pr
 
 ---
 
-## 2. Decisiones a tomar ANTES de ejecutar
+## 2. Decisiones (resueltas en spec draft.12)
 
-**PA-12 — Framework de UI.** Los tres candidatos cumplen UI-45; el desempate es de proyecto (spec §17.1). La recomendación registrada en la spec: **Svelte 5 (runes)** — proyecto nuevo sin deuda de compatibilidad, runtime mínimo, reactividad de grano fino sin VDOM; los paneles calientes se escriben a mano igual (UI-43), así que la "fluidez adquirida" en Vue pesa menos, y los `triggerRef` manuales de v1 fueron la señal de pelear contra el framework. Alternativa válida: **Vue 3 + `shallowRef`** si preferís compartir idioma con el ERP. **Bloquea el frente B.**
+**PA-12 — RESUELTO: Vue 3 + Ark UI + dockview-vue + TanStack Virtual; PrimeVue afuera.** El stack completo con su racional está en §17.2 de la spec. Consecuencias operativas acá: B-03 usa dockview (no splitters a mano) y arranca con el **spike del popout bajo Tauri** (§10 UI-08); B-04 usa TanStack Virtual para la ventana pero el scrollbar indexado de sesión completa es propio (UI-25); el look es de tokens (UI-46), no de librería.
 
-**PA-06 — Retención.** Propuesta: **descarte con aviso** (v2.0): al superar 10M records o 1 GB se descartan las páginas más viejas y la UI muestra desde cuándo hay datos. Coherente con PR-11 (pérdida visible, jamás silenciosa) y sin la complejidad del spill a mmap; el buffer circular a disco de F7 (SES-02) cubrirá el caso "quiero lo de hace 10 minutos". Reversible: el store pagina desde el día uno, spill sería agregar un destino a las páginas viejas.
+**PA-06 — RESUELTO: descarte con aviso** (spec §17.2). El store pagina desde el día uno; A-02 implementa el descarte paginado con la marca "datos desde".
 
 **Nota PA-10.** El scaffold usa los nombres ya resueltos: `mole-app`, bundle `net.elesis.mole-app`.
 
@@ -89,10 +90,10 @@ host/
 
 | # | Tarea | Termina cuando |
 |---|---|---|
-| B-01 | Scaffold Tauri 2 (`mole-app`, PA-10) + framework + puente IPC: tick por evento, slice por `invoke` binario | la app muestra rec/s reales de un replay sin tocar JSON por record |
+| B-01 | Scaffold Tauri 2 (`mole-app`, PA-10) + Vue 3 + tokens UI-46 + puente IPC: tick por evento, slice por `invoke` binario | la app muestra rec/s reales de un replay sin tocar JSON por record |
 | B-02 | Shell: barra superior con identidad del dispositivo (UI-37), salud del enlace con números (UI-35, PR-14), controles de conexión (UI-34: baudrate solo si UART) | conectar/desconectar/reconectar contra replay y puerto |
-| B-03 | Árbol de splitters a mano + pestañas + persistencia + presets con atajo (UI-04..08, FEAT-55/56) | layout arrastrable, guardado y restaurado |
-| B-04 | Panel Log: scroller virtual (UI-23..26: altura fija, scrollbar indexado, anclaje), columnas conmutables (UI-12), modos de tiempo (UI-13), follow/freeze con píldora (UI-19), filas especiales de drops/cortes (UI-20), copiado (UI-22) | S-6 salvo filtros; PERF-09 preliminar con replay a máxima velocidad |
+| B-03 | **Spike primero**: popout de dockview bajo Tauri (si no anda: ventana Tauri propia, HOST-14). Después: dockview-vue con pestañas, persistencia y presets con atajo (UI-04..08, FEAT-55/56), chrome restyleado con UI-46 | layout arrastrable, guardado y restaurado; veredicto del popout documentado |
+| B-04 | Panel Log: TanStack Virtual para la ventana + scrollbar indexado propio (UI-23..26), columnas conmutables (UI-12), modos de tiempo (UI-13), follow/freeze con píldora (UI-19, `followOnAppend`), filas especiales de drops/cortes (UI-20), copiado (UI-22) | S-6 salvo filtros; PERF-09 preliminar con replay a máxima velocidad |
 | B-05 | Barra de filtros siempre visible (UI-14) + búsqueda n/N (UI-17) + resaltado por reglas (UI-16) + marcadores y delta-a-marca (UI-18, FEAT-57/58/59) | S-6 completo |
 | B-06 | Panel Watch: tabla con stats y formato retroactivo por fila (UI-27), agrupación jerárquica (UI-28), sparklines en canvas (FEAT-09) | S-7 |
 | B-07 | Nivel de log en vivo desde la UI (FEAT-03 → CTL_SET_LEVEL) + canal raw (UI-33, HOST-05) | S-8 |
