@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { DockviewVue } from "dockview-vue";
-import { prefs, t } from "./i18n.js";
+import { t } from "./i18n.js";
 import PrefsModal from "./modals/PrefsModal.vue";
 import PortModal from "./modals/PortModal.vue";
 
@@ -172,11 +172,6 @@ const linkClass = computed(() => {
   if (tk.link.gaps > 0 || tk.link.drops > 0) return "link-warn";
   return tk.link.recPerSec > 0 ? "link-ok" : "link-warn";
 });
-
-// dockview theme según preferencia
-const dockTheme = computed(() =>
-  prefs.theme === "light" ? "dockview-theme-light" : "dockview-theme-dark",
-);
 </script>
 
 <template>
@@ -250,7 +245,8 @@ const dockTheme = computed(() =>
     </div>
 
     <div class="center">
-      <DockviewVue :class="dockTheme" class="dock" @ready="onDockReady" />
+      <!-- el color real sale de los tokens (.dock.dockview-theme-dark) -->
+      <DockviewVue class="dock dockview-theme-dark" @ready="onDockReady" />
     </div>
 
     <div class="statusbar">
