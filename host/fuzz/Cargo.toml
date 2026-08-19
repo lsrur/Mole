@@ -1,0 +1,23 @@
+[package]
+name = "mole-codec-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mole-codec = { path = "../mole-codec" }
+
+[[bin]]
+name = "decode_frame"
+path = "fuzz_targets/decode_frame.rs"
+test = false
+doc = false
+bench = false
+
+# crate independiente: el workspace de host/ lo excluye, se compila solo
+# bajo `cargo +nightly fuzz`
+[workspace]
