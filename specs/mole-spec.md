@@ -1,6 +1,6 @@
 ---
 doc: mole-spec.md
-version: 2.0.0-draft.8
+version: 2.0.0-draft.9
 fecha: 2026-08-18
 estado: BORRADOR — para debate
 alcance: protocolo + librería de firmware + aplicación desktop
@@ -21,6 +21,7 @@ compatibilidad: NINGUNA con v1.x (ruptura deliberada y total)
 | 2.0.0-draft.6 | 2026-08-18 | §10 reescrita y expandida: layout de splitters con presets, estrategia de renderizado por panel, especificación completa del panel de Log y del scroller virtual, requisitos de stack. Reglas UI-01..UI-45, FEAT-55..62. Nuevo PA-12 (framework). |
 | 2.0.0-draft.7 | 2026-08-18 | Pasada de consistencia previa al congelamiento: §8.5 actualizada a las APIs de descriptor y formateo diferido; PERF-01 revisado a la baja y nuevos PERF-14/15; nota sobre numeración de FEAT. §6 y §7 quedan **congeladas**. Abiertos: PA-03, PA-06, PA-12. |
 | 2.0.0-draft.8 | 2026-08-18 | Correcciones de wire previas a F0, surgidas de la revisión del plan (mecanismo Q-5): `span_id` pasa a **contador global** de instancias con regla de stale en el host (REC-21); nuevo `flags: u8` por campo en `REC_TYPE_DEF`, bit 0 = big-endian — el MCU nunca invierte, el host invierte al decodificar (REC-43/REC-45, resuelve Q-2 del plan de F0); §7.10 reescrita: los checks usan **formateo diferido**, `REC_CHECK_FAIL` pasa a `{ fmt_id, task_id, core, args[] }`. Retoques editoriales: FEAT-05 (costo en régimen cero) y PLAT-04 (framework de UI remite a PA-12). §6 y §7 quedan **congeladas en este draft**. |
+| 2.0.0-draft.9 | 2026-08-18 | Huecos encontrados al calcular los vectores ancla (mecanismo Q-5, T-03): **PR-20** — todo `char[]` lleva prefijo de longitud `u8`, uniforme; `REC_SESSION` totalmente tipado (CAT-09); payload de `REC_STATE` definido (§7.8); **REC-52** — valores numéricos del enum de tipos de wire; números asignados a `SymKind` (CAT-03), niveles de status (§7.8), scopes de pausa (FW-20), políticas de backpressure (PR-12) y motivos de pausa/reanudación (FW-18, REC-20); `REC_RESUMED` gana `reason: u8` (FW-18 ya lo exigía); `REC_PAUSED` renombra `sym`→`file_sym`. §6 y §7 quedan **congeladas en este draft**. |
 
 ## Convenciones del documento
 
@@ -271,7 +272,7 @@ Criterios de aceptación medibles. Cada uno tiene un test asociado en §15.
 
 ## 6. Framing y protocolo
 
-> **CONGELADO en draft.8.** Todo cambio a §6 o §7 a partir de acá requiere versión menor nueva y actualización de los vectores de TEST-01.
+> **CONGELADO en draft.9.** Todo cambio a §6 o §7 a partir de acá requiere versión menor nueva y actualización de los vectores de TEST-01.
 
 ### 6.1 Capas
 
@@ -331,6 +332,8 @@ Flags del frame:
 
 **PR-10** — **Todo record lleva timestamp del MCU.** En v1 el desktop timestampeaba a la llegada, lo que metía el jitter del buffer serial dentro de los datos. Para un profiler eso es descalificante.
 
+**PR-20** — **Cadenas en payloads.** Todo `char[]` lleva prefijo de longitud `u8` (0–255), **incluso cuando es el último campo del record**. Una sola regla para los dos codecs: sin ella, los records con cadenas interiores (`REC_SESSION`, `REC_TYPE_DEF`) serían indecodificables, y la cadena final "implícita por `len`" sería un caso especial que dos implementaciones pueden interpretar distinto. Coherente con REC-38 (cadena de runtime = 1 + len bytes). En las tablas de payload, `str` significa exactamente esto.
+
 ### 6.4 Catálogo de símbolos
 
 **CAT-01** — Se elimina el hash FNV-16 de v1. Los símbolos se identifican con un **`sym_id: u16` secuencial** asignado en orden de registro. Cero colisiones, por construcción.
@@ -351,7 +354,7 @@ do { static mole::SymId _s = mole::intern("Voltage", mole::SymKind::Watch);
 
 El costo en régimen es un `load` de una variable estática. Para uso en templates o cuando se quiere el id explícito, `mole::Sym s("Voltage");` como global.
 
-**CAT-03** — Tipos de símbolo (`SymKind`): `Watch`, `Tag`, `Task`, `File`, `Command`, `Span`, `Counter`, `Machine`, `State`, `Bind`, `Dump`, `Schema`.
+**CAT-03** — Tipos de símbolo (`SymKind`), con su valor de wire: `Watch`(1), `Tag`(2), `Task`(3), `File`(4), `Command`(5), `Span`(6), `Counter`(7), `Machine`(8), `State`(9), `Bind`(10), `Dump`(11), `Schema`(12). El 0 queda reservado como "sin tipo".
 
 **CAT-04** — `REC_SYM_DEF` payload: `{ sym_id: u16, kind: u8, parent: u16, name: char[] }`. `parent` liga, por ejemplo, un `State` a su `Machine`, o un símbolo a su `File`.
 
@@ -369,10 +372,14 @@ El costo en régimen es un `load` de una variable estática. Para uso en templat
 
 ```
 Desktop → MCU:  CTL_HELLO { proto_ver: u8, known_epoch: u32, known_catalog_hash: u32 }
-MCU → Desktop:  REC_SESSION { epoch, catalog_hash, chip_model, chip_rev, idf_ver[],
-                              app_name[], app_build_time[], app_elf_sha256[8],
-                              cpu_freq_mhz, free_heap, mole_ver }
+MCU → Desktop:  REC_SESSION { epoch: u32, catalog_hash: u32,
+                              chip_model: u16, chip_rev: u16,
+                              idf_ver: str, app_name: str, app_build_time: str,
+                              app_elf_sha256: u8[8],
+                              cpu_freq_mhz: u16, free_heap: u32, mole_ver: str }
 ```
+
+`chip_model` y `chip_rev` con la convención de `esp_chip_info()` (revisión = major × 100 + minor). `str` según PR-20.
 
 **CAT-10** — Si `known_epoch != epoch` o `known_catalog_hash != catalog_hash`, el MCU DEBE re-emitir el catálogo completo más el **último valor conocido** de cada watch, bind, status y máquina de estados. Esto es el *late-join sync* que v1 prometía en el README y no tenía implementado en ninguna de las dos puntas.
 
@@ -388,10 +395,10 @@ MCU → Desktop:  REC_SESSION { epoch, catalog_hash, chip_model, chip_rev, idf_v
 
 | Política | Comportamiento |
 |---|---|
-| `Block` | El productor espera lugar en el ring. Datos exactos, timing alterado. |
-| `DropNewest` | Descarta el record nuevo. Default para `Log` y `Watch`. |
-| `DropOldest` | Descarta el más viejo del ring. Default para `Watch` en modo "último valor". |
-| `Decimate` | Descarta 1 de cada N crecientemente bajo presión. Opción para `Watch` de alta frecuencia. |
+| `Block`(0) | El productor espera lugar en el ring. Datos exactos, timing alterado. |
+| `DropNewest`(1) | Descarta el record nuevo. Default para `Log` y `Watch`. |
+| `DropOldest`(2) | Descarta el más viejo del ring. Default para `Watch` en modo "último valor". |
+| `Decimate`(3) | Descarta 1 de cada N crecientemente bajo presión. Opción para `Watch` de alta frecuencia. |
 
 **PR-13** — `REC_STATS` se emite cada 500 ms y ante cada cambio de `dropped`: `{ enqueued: u32, dropped: u32, dropped_by_kind: u16[8], ring_high_water: u16, sym_overflow: u16, tx_bytes: u32, free_heap: u32, min_free_heap: u32 }`.
 
@@ -455,8 +462,8 @@ MCU → Desktop:  REC_SESSION { epoch, catalog_hash, chip_model, chip_rev, idf_v
 | 0x90 | `REC_CMD_DEF` | cmd | §7.11 |
 | 0xA0 | `REC_BLOB_BEGIN` | blob | §7.9 |
 | 0xA1 | `REC_BLOB_CHUNK` | blob | §7.9 |
-| 0xF0 | `REC_PAUSED` | ctrl | `{ task_id: u8, sym: u16, line: u16, reason: u8 }` |
-| 0xF1 | `REC_RESUMED` | ctrl | `{ task_id: u8 }` |
+| 0xF0 | `REC_PAUSED` | ctrl | `{ task_id: u8, file_sym: u16, line: u16, reason: u8 }` |
+| 0xF1 | `REC_RESUMED` | ctrl | `{ task_id: u8, reason: u8 }` |
 
 ### 7.2 Logs (REC-01)
 
@@ -504,6 +511,27 @@ Se accede por `mole::logs()`, nunca por las macros. Los dos records conviven de 
 | Runtime (`const char*`, `string_view`) | Copia inline | 1 + len bytes |
 
 Es la única situación en la que el camino caliente hace una copia. Se detecta por sobrecarga, no por heurística.
+
+**REC-52** — Valores de wire del enum de tipos. Es **un solo enum**, compartido por `arg_types` de `REC_FMT_DEF`, `type` de `REC_WATCH`/`REC_BIND_DEF`/`REC_BIND_VAL`/`CTL_BIND_SET`/`CTL_CMD` y el campo `wire` de `REC_TYPE_DEF`:
+
+| Valor | Tipo | Bytes en el wire |
+|---|---|---|
+| 0x00 | reservado / inválido | — |
+| 0x01 | `u8` | 1 |
+| 0x02 | `i8` | 1 |
+| 0x03 | `u16` | 2 |
+| 0x04 | `i16` | 2 |
+| 0x05 | `u32` | 4 |
+| 0x06 | `i32` | 4 |
+| 0x07 | `u64` | 8 |
+| 0x08 | `i64` | 8 |
+| 0x09 | `f32` | 4 |
+| 0x0A | `f64` | 8 |
+| 0x0B | `bool` | 1 (0 o 1) |
+| 0x0C | `sym` — cadena literal internada | 2 (`sym_id`) |
+| 0x0D | `str` — cadena de runtime | 1 + len (PR-20) |
+| 0x0E | `ptr` | 4 (dirección) |
+| 0xF0 | `struct` | ver REC-44/REC-45 |
 
 #### 7.2.4 Logueo de structs
 
@@ -702,7 +730,7 @@ void radioTask(void*) {
 
 **REC-19** — El desktop construye: (a) tabla con conteo, total, media, **p50/p95/p99, max**; (b) timeline por tarea con los spans anidados dibujados como barras; (c) árbol de costo acumulado tipo flamegraph. Esto es cualitativamente distinto del `min/max/avg` de v1 y es lo que efectivamente sirve para encontrar el outlier que te rompe el timing.
 
-**REC-20** — **Los spans abiertos al momento de una pausa se invalidan.** Al entrar en un checkpoint, toda tarea descarta sus spans abiertos y emite `REC_SPAN_ABORT { span_id, reason: PAUSED }` por cada uno; el host los marca como inválidos y los excluye de los histogramas. No se descuenta el tiempo pausado. Reportar 4 segundos de "build_frame" porque el usuario apretó pausa es peor que no reportar nada, y descontar exigiría que cada tarea llevara su propio acumulado de tiempo pausado, lo que se complica con el alcance `Barrier` (FW-20). Se revisa si aparece un caso de uso real que lo justifique. Resuelto en PA-05.
+**REC-20** — **Los spans abiertos al momento de una pausa se invalidan.** Al entrar en un checkpoint, toda tarea descarta sus spans abiertos y emite `REC_SPAN_ABORT { span_id, reason: PAUSED=1 }` por cada uno (0 reservado); el host los marca como inválidos y los excluye de los histogramas. No se descuenta el tiempo pausado. Reportar 4 segundos de "build_frame" porque el usuario apretó pausa es peor que no reportar nada, y descontar exigiría que cada tarea llevara su propio acumulado de tiempo pausado, lo que se complica con el alcance `Barrier` (FW-20). Se revisa si aparece un caso de uso real que lo justifique. Resuelto en PA-05.
 
 **REC-21** — `span_id` es un **contador global de instancias**, u16 atómico con wrap en 65535, asignado en `BEGIN`. No es por tarea: `REC_SPAN_END` y `REC_SPAN_ABORT` no llevan `task_id`, y con contadores por tarea dos tareas podrían tener el mismo id abierto a la vez, dejando el `END` sin dueño decidible. El host tolera `END` sin `BEGIN` (por drops) descartando el span. Un `BEGIN` cuyo `span_id` ya figura abierto descarta la instancia anterior como stale (caso wrap con un span largo abierto).
 
@@ -727,7 +755,9 @@ mole.state("link_fsm", "JOINED");
 
 El desktop dibuja una **lane temporal** por máquina, con la duración de cada estado y las transiciones. Para debuggear un stack LoRa o un protocolo de handshake es exactamente la vista que uno quiere y ninguna herramienta actual da.
 
-`REC_STATUS` mantiene el LED de v1 (OFF/verde/amarillo/rojo) como indicador de salud simple.
+`REC_STATE`: `{ machine_sym: u16, state_sym: u16 }`. La relación State→Machine también viaja por `parent` en el catálogo (CAT-04); el record lleva ambos igual, porque son 2 bytes en un canal de baja frecuencia y evitan transiciones huérfanas si se pierde un `REC_SYM_DEF`.
+
+`REC_STATUS` mantiene el LED de v1 como indicador de salud simple. `level`: `OFF`(0), `VERDE`(1), `AMARILLO`(2), `ROJO`(3).
 
 ### 7.9 Blobs (REC-26)
 
@@ -896,15 +926,17 @@ Recoge el diseño discutido: **checkpoint cooperativo por tarea**, no `vTaskSusp
 3. Espera `RESUME`/`STEP` con **timeout obligatorio** (`MOLE_PAUSE_TIMEOUT_MS`, default 300.000 = 5 min). Al vencer, reanuda sola y emite `REC_RESUMED` con motivo `TIMEOUT`. Sin esto, cerrar la app con el MCU pausado deja una tarea muerta para siempre.
 4. Se re-suscribe al TWDT y emite `REC_RESUMED`.
 
+Motivos de wire: `REC_PAUSED.reason` — `CTL_PAUSE`(1), `mole::pause()`(2), break on check fail(3). `REC_RESUMED.reason` — `CTL_RESUME`(1), `STEP`(2), `TIMEOUT`(3). El 0 queda reservado en ambos.
+
 **FW-19** — `mole::pause()` es un checkpoint incondicional (breakpoint en código).
 
 **FW-20** — Alcances de pausa (`scope` en `CTL_PAUSE`):
 
 | Scope | Comportamiento |
 |---|---|
-| `Task` | Solo la tarea indicada se detiene en su próximo checkpoint |
-| `All` | Todas las tareas participantes, cada una en su checkpoint |
-| `Barrier` | Como `All`, pero el desktop muestra "3/5 detenidas" hasta converger; con timeout de convergencia |
+| `Task`(0) | Solo la tarea indicada se detiene en su próximo checkpoint |
+| `All`(1) | Todas las tareas participantes, cada una en su checkpoint |
+| `Barrier`(2) | Como `All`, pero el desktop muestra "3/5 detenidas" hasta converger; con timeout de convergencia |
 
 **FW-21** — `vTaskSuspend()` desde afuera **NO se implementa**. Suspender una tarea que tiene tomado un mutex produce inversión de prioridad o deadlock; en el peor caso, la tarea suspendida tiene el mutex de Mole y el debugger se cuelga a sí mismo.
 

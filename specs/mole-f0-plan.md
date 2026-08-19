@@ -3,7 +3,7 @@ doc: mole-f0-plan.md
 version: 1.0.1
 fecha: 2026-08-18
 estado: PARA EJECUTAR
-depende_de: mole-spec.md v2.0.0-draft.8 (§6 y §7 congeladas)
+depende_de: mole-spec.md v2.0.0-draft.9 (§6 y §7 congeladas)
 ejecutor: Claude Code
 ---
 
@@ -16,6 +16,7 @@ ejecutor: Claude Code
 | 1.0.0 | 2026-08-18 | Plan inicial de F0. |
 | 1.0.1 | 2026-08-18 | Dependencia actualizada a spec draft.8. Q-2 resuelto por la spec: flag por campo en `REC_TYPE_DEF`, el host invierte. |
 | 1.0.2 | 2026-08-18 | R-1/T-01: v1 se elimina por completo — sin tag `v1-archive` ni rama `v2`, historia nueva sobre `main`. R-2 alineado al directorio real `specs/`. |
+| 1.0.3 | 2026-08-18 | Dependencia actualizada a spec draft.9 (Q-5 en acción durante T-03: PR-20 cadenas, REC_SESSION tipado, REC_STATE, REC-52 enum de tipos, valores numéricos de enums). |
 
 ---
 
