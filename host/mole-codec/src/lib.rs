@@ -10,7 +10,7 @@ pub mod crc32;
 pub mod error;
 pub mod frame;
 pub mod record;
-mod rw;
+pub mod rw;
 pub mod types;
 pub mod wire;
 

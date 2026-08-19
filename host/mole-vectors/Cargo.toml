@@ -8,6 +8,15 @@ license.workspace = true
 [lints]
 workspace = true
 
+[lib]
+name = "mole_vectors"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mole-vectors"
+path = "src/main.rs"
+
 [dependencies]
 mole-codec = { path = "../mole-codec" }
 mole-fmt = { path = "../mole-fmt" }
+serde_json = { version = "1", features = ["preserve_order"] }

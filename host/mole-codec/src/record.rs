@@ -430,7 +430,10 @@ impl Record {
                 let fmt = r.str_pr20()?.to_vec();
                 Record::FmtDef(FmtDef { fmt_id, file_sym, line, arg_types, fmt })
             }
-            REC_TYPE_DEF => Record::TypeDef(TypeDef::decode_payload(payload)?),
+            // TypeDef parsea el payload completo por su cuenta; devolvemos
+            // directo para no disparar el chequeo de sobrantes sobre un
+            // Reader que quedó sin avanzar.
+            REC_TYPE_DEF => return Ok(Record::TypeDef(TypeDef::decode_payload(payload)?)),
             REC_LOG => Record::Log {
                 level: r.u8()?,
                 task_id: r.u8()?,

@@ -357,8 +357,180 @@ def self_check(anchors) -> int:
     return failures
 
 
+# ---------------------------------------------------------------------------
+# Verificación cruzada (V-2.3): recalcula los vectores de codec_vectors.json
+# que están dentro del alcance de este script y falla si difieren.
+# ---------------------------------------------------------------------------
+
+WIRE_BY_NAME = {
+    "u8": 0x01, "i8": 0x02, "u16": 0x03, "i16": 0x04, "u32": 0x05, "i32": 0x06,
+    "u64": 0x07, "i64": 0x08, "f32": 0x09, "f64": 0x0A, "bool": 0x0B,
+    "sym": 0x0C, "str": 0x0D, "ptr": 0x0E, "struct": 0xF0,
+}
+FLAG_BY_NAME = {"CATALOG": 0x1, "DROPS": 0x2, "PAUSED": 0x4}
+REC_OPCODES = {
+    "REC_SPAN_END": 0x51, "REC_SYM_DEF": 0x02, "REC_FMT_DEF": 0x05,
+    "REC_LOG_FMT": 0x11, "REC_WATCH": 0x20, "REC_TYPE_DEF": 0x06,
+    "REC_STATE": 0x70, "REC_STATUS": 0x71, "REC_EVENT": 0x81,
+    "REC_SPAN_BEGIN": 0x50, "REC_SPAN_ABORT": 0x52, "REC_PONG": 0x04,
+    "REC_PAUSED": 0xF0, "REC_RESUMED": 0xF1,
+}
+
+
+def rebuild_arg_bytes(args_json):
+    """Empaqueta args desde su representación JSON (v o bits_hex)."""
+    out = b""
+    for a in args_json:
+        t = a["t"]
+        if t in ("f32", "f64"):
+            out += bytes.fromhex(a["bits_hex"])
+        elif t == "struct":
+            return None  # los campos exactos viven en el registro de tipos: fuera de alcance
+        elif t == "bool":
+            out += u8(1 if a["v"] else 0)
+        elif t == "str":
+            raw = bytes.fromhex(a["bytes_hex"]) if "bytes_hex" in a else a["v"].encode()
+            out += s(raw.decode("latin-1"))
+        elif t == "sym":
+            out += u16(a["v"])
+        else:
+            size = {"u8": 1, "i8": 1, "u16": 2, "i16": 2, "u32": 4, "i32": 4,
+                    "u64": 8, "i64": 8, "ptr": 4}[t]
+            out += int(a["v"]).to_bytes(size, "little", signed=a["v"] < 0)
+    return out
+
+
+def rebuild_record(rec):
+    """Reconstruye el payload de los tipos de record al alcance del script."""
+    t = rec.get("type")
+    if t == "REC_SPAN_END":
+        return u16(rec["span_id"])
+    if t == "REC_SYM_DEF":
+        return u16(rec["sym_id"]) + u8(rec["kind"]) + u16(rec["parent"]) + s(rec["name"])
+    if t == "REC_FMT_DEF":
+        types_b = b""
+        for at in rec["arg_types"]:
+            if isinstance(at, dict):
+                types_b += u8(0xF0) + u16(at["struct"])
+            else:
+                types_b += u8(WIRE_BY_NAME[at])
+        return (u16(rec["fmt_id"]) + u16(rec["file_sym"]) + u16(rec["line"])
+                + u8(rec["argc"]) + types_b + s(rec["fmt"]))
+    if t == "REC_LOG_FMT":
+        args_b = rebuild_arg_bytes(rec["args"])
+        if args_b is None:
+            return None
+        return (u8(rec["level"]) + u8(rec["task_id"]) + u8(rec["core"])
+                + u16(rec["tag_sym"]) + u16(rec["fmt_id"]) + args_b)
+    if t == "REC_WATCH":
+        val_b = rebuild_arg_bytes([rec["value"]])
+        if val_b is None:
+            return None
+        return u16(rec["sym"]) + u8(WIRE_BY_NAME[rec["value"]["t"]]) + val_b
+    if t == "REC_TYPE_DEF":
+        body = u16(rec["type_id"]) + s(rec["name"]) + u8(rec["nfields"])
+        for f in rec["fields"]:
+            body += (u16(f["name_sym"]) + u8(WIRE_BY_NAME[f["wire"]]) + u8(f["flags"])
+                     + u16(f["offset"]) + u16(f["size"]) + u16(f["ref_type"]))
+        return body
+    if t == "REC_STATE":
+        return u16(rec["machine_sym"]) + u16(rec["state_sym"])
+    if t == "REC_STATUS":
+        return u16(rec["sym"]) + u8(rec["level"])
+    if t == "REC_EVENT":
+        return u16(rec["sym"]) + u32(rec["arg"])
+    if t == "REC_SPAN_BEGIN":
+        return (u16(rec["span_id"]) + u16(rec["sym"]) + u16(rec["parent_span_id"])
+                + u8(rec["task_id"]))
+    if t == "REC_SPAN_ABORT":
+        return u16(rec["span_id"]) + u8(rec["reason"])
+    if t == "REC_PONG":
+        return u32(rec["nonce"])
+    if t == "REC_PAUSED":
+        return u8(rec["task_id"]) + u16(rec["file_sym"]) + u16(rec["line"]) + u8(rec["reason"])
+    if t == "REC_RESUMED":
+        return u8(rec["task_id"]) + u8(rec["reason"])
+    return None
+
+
+def check_file(path):
+    with open(path) as fh:
+        doc = json.load(fh)
+    vectors = {v["id"]: v for v in doc["vectors"]}
+    checked, skipped, failures = 0, 0, []
+
+    def mismatch(vid, what, expected, got):
+        failures.append(f"{vid}.{what}\n  archivo:    {expected}\n  recalculado: {got}")
+
+    for v in doc["vectors"]:
+        vid, layer = v["id"], v["layer"]
+        if layer == "cobs" and "must_fail" not in v:
+            enc = cobs_encode(bytes.fromhex(v["decoded_hex"])).hex()
+            checked += 1
+            if enc != v["encoded_hex"]:
+                mismatch(vid, "encoded_hex", v["encoded_hex"], enc)
+        elif layer == "cobs":
+            checked += 1
+            try:
+                cobs_decode(bytes.fromhex(v["encoded_hex"]))
+                failures.append(f"{vid}: debia fallar ({v['must_fail']}) y decodifico")
+            except CobsError:
+                pass
+        elif layer == "crc32":
+            crc = f"{crc32_checked(bytes.fromhex(v['data_hex'])):08x}"
+            checked += 1
+            if crc != v["crc_hex"]:
+                mismatch(vid, "crc_hex", v["crc_hex"], crc)
+        elif layer == "record" and "record" in v:
+            payload = rebuild_record(v["record"])
+            if payload is None:
+                skipped += 1
+                continue
+            rec_bytes = record(
+                REC_OPCODES[v["record"]["type"]], v["record"].get("dt_us", 0), payload
+            ).hex()
+            checked += 1
+            if rec_bytes != v["bytes_hex"]:
+                mismatch(vid, "bytes_hex", v["bytes_hex"], rec_bytes)
+        elif layer == "frame" and "must_fail" not in v:
+            f = v["frame"]
+            recs = [bytes.fromhex(vectors[rid]["bytes_hex"]) for rid in f["records"]]
+            flags = 0
+            for name in f["flags"]:
+                flags |= FLAG_BY_NAME[name]
+            pre, wire = frame(f["seq"], f["t_base_us"], recs, flags)
+            checked += 1
+            if pre.hex() != v["pre_cobs_hex"]:
+                mismatch(vid, "pre_cobs_hex", v["pre_cobs_hex"], pre.hex())
+            if wire.hex() != v["wire_hex"]:
+                mismatch(vid, "wire_hex", v["wire_hex"], wire.hex())
+        elif layer == "catalog" and "must_fail" not in v:
+            # CAT-08: CRC32 incremental sobre payloads de definiciones en orden
+            blob = b""
+            for rid in v["records"]:
+                rec_bytes = bytes.fromhex(vectors[rid]["bytes_hex"])
+                blob += rec_bytes[4:]
+            got = f"{crc32_checked(blob):08x}"
+            expected = v["expect"]["catalog_hash_hex"]
+            checked += 1
+            if got != expected:
+                mismatch(vid, "catalog_hash", expected, got)
+        else:
+            skipped += 1
+
+    print(f"verificacion cruzada: {checked} recalculados, {skipped} fuera de alcance")
+    if failures:
+        print("\n".join(failures))
+        return 1
+    return 0
+
+
 def main():
     anchors = build_anchors()
+    if "--check" in sys.argv:
+        idx = sys.argv.index("--check")
+        path = sys.argv[idx + 1] if len(sys.argv) > idx + 1 else "codec_vectors.json"
+        return check_file(path)
     if "--json" in sys.argv:
         clean = [{k: v for k, v in a.items() if not k.startswith("_")} for a in anchors]
         json.dump(clean, sys.stdout, indent=2, ensure_ascii=False)

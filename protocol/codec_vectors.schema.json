@@ -35,7 +35,8 @@
         "truncated",
         "unknown_type",
         "arg_count_mismatch",
-        "depth_exceeded"
+        "depth_exceeded",
+        "unknown_fmt"
       ]
     },
     "argType": {
@@ -45,13 +46,21 @@
     "arg": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["t", "v"],
+      "required": ["t"],
       "properties": {
         "t": { "$ref": "#/$defs/argType" },
         "v": {},
         "bits_hex": { "$ref": "#/$defs/hex" },
+        "bytes_hex": { "$ref": "#/$defs/hex" },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/arg" } },
         "type_id": { "type": "integer", "minimum": 0, "maximum": 65535 }
       },
+      "anyOf": [
+        { "required": ["v"] },
+        { "required": ["bits_hex"] },
+        { "required": ["bytes_hex"] },
+        { "required": ["fields"] }
+      ],
       "if": { "properties": { "t": { "enum": ["f32", "f64"] } } },
       "then": { "required": ["bits_hex"] }
     },
