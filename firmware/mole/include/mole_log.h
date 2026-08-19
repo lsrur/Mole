@@ -133,6 +133,30 @@ constexpr bool is_char_ptr_v =
     std::is_same_v<std::remove_cv_t<T>, const char*> ||
     std::is_same_v<std::remove_cv_t<T>, char*>;
 
+// ---- detección de descriptores por ADL (mole_describe.h) ----
+// La búsqueda es puramente ADL: si el tipo tiene un mole_describe/-_enum
+// al lado (REC-40), se encuentra en el contexto de instanciación.
+template <class T, class = void>
+struct HasTypeDesc : std::false_type {};
+template <class T>
+struct HasTypeDesc<T, std::void_t<decltype(mole_describe(static_cast<const T*>(nullptr)))>>
+    : std::true_type {};
+
+template <class T, class = void>
+struct HasEnumDesc : std::false_type {};
+template <class T>
+struct HasEnumDesc<T, std::void_t<decltype(mole_describe_enum(static_cast<const T*>(nullptr)))>>
+    : std::true_type {};
+
+// definidos en mole_describe.h; visibles en el punto de instanciación
+template <class T>
+void pack_struct_values(PackBuf& b, const T& obj);
+template <class T>
+uint16_t type_id();
+template <class E>
+uint16_t enum_type_id();
+struct Bytes;
+
 template <class T>
 inline void pack_arg(PackBuf& b, const T& v) {
     if constexpr (is_char_array_v<T>) {
@@ -152,9 +176,16 @@ inline void pack_arg(PackBuf& b, const T& v) {
         b.u16(static_cast<uint16_t>(a >> 16));
     } else if constexpr (std::is_same_v<std::remove_cv_t<T>, bool>) {
         b.u8(v ? 1 : 0);
+    } else if constexpr (std::is_enum_v<std::remove_cv_t<T>>) {
+        // con o sin descriptor viaja el entero base (REC-53); el nombre lo
+        // resuelve el host
+        b.put(&v, sizeof v);
     } else if constexpr (std::is_arithmetic_v<std::remove_cv_t<T>>) {
         // little-endian nativo en Xtensa/RISC-V y en los hosts soportados
         b.put(&v, sizeof v);
+    } else if constexpr (HasTypeDesc<std::remove_cv_t<T>>::value) {
+        // struct descripto: modo valores (REC-44/45)
+        pack_struct_values(b, v);
     } else {
         static_assert(!sizeof(T*), "MOLE: tipo de argumento no soportado (REC-37)");
     }
@@ -163,10 +194,28 @@ inline void pack_arg(PackBuf& b, const T& v) {
 // ---- tag de wire por argumento (para el REC_FMT_DEF); mismas ramas ----
 template <class T>
 inline void append_tag(uint8_t* tags, uint8_t& n) {
+    using U = std::remove_cv_t<T>;
     if constexpr (is_char_array_v<T>) {
         tags[n++] = WIRE_SYM;
-    } else if constexpr (is_char_ptr_v<T>) {
+    } else if constexpr (is_char_ptr_v<T> || std::is_same_v<U, Bytes>) {
+        // MOLE_BYTES viaja como cadena de runtime (hexdump degradado)
         tags[n++] = WIRE_STR;
+    } else if constexpr (std::is_enum_v<U>) {
+        if constexpr (HasEnumDesc<U>::value) {
+            // 0xF1 + type_id inline (REC-53); registra si hace falta
+            const uint16_t id = enum_type_id<U>();
+            tags[n++] = kArgTagEnum;
+            tags[n++] = static_cast<uint8_t>(id);
+            tags[n++] = static_cast<uint8_t>(id >> 8);
+        } else {
+            tags[n++] = scalar_wire<std::underlying_type_t<U>>();
+        }
+    } else if constexpr (HasTypeDesc<U>::value) {
+        // 0xF0 + type_id inline (REC-44); registra si hace falta
+        const uint16_t id = type_id<U>();
+        tags[n++] = WIRE_STRUCT;
+        tags[n++] = static_cast<uint8_t>(id);
+        tags[n++] = static_cast<uint8_t>(id >> 8);
     } else {
         tags[n++] = scalar_wire<T>();
     }

@@ -463,6 +463,17 @@ void count_oversize_log() {
     count_drop(core(), CH_LOG);
 }
 
+// ---- registro de tipos (mole_describe.h) ----
+
+uint16_t alloc_type_id() {
+    static std::atomic<uint16_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool meta_push_public(uint8_t type, const uint8_t* payload, uint8_t len) {
+    return meta_push(type, payload, len);
+}
+
 }  // namespace detail
 
 void set_min_level(Level lvl) {

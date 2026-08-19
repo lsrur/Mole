@@ -7,6 +7,7 @@
 #include "mole_config.h"
 #include "mole_wire.h"
 
+#include "mole_describe.h"
 #include "mole_log.h"
 
 #if MOLE_ENABLED

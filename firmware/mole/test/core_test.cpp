@@ -426,6 +426,152 @@ static void test_logs_fallback() {
     CHECK(std::memcmp(buf + 10, "armado en runtime", 17) == 0);
 }
 
+// ---------------------------------------------------------------------------
+// F1-T05: descriptores (TEST-09)
+// ---------------------------------------------------------------------------
+
+enum class Mode : uint8_t { RAW = 0, AVG = 1, MEDIAN = 2 };
+MOLE_DESCRIBE_ENUM(Mode, RAW, AVG, MEDIAN);
+
+struct Sens {
+    uint8_t a;
+    uint16_t b;
+};
+MOLE_DESCRIBE_BE(Sens, a, b);
+
+struct Imu {
+    float ax[3];
+    Mode mode;
+};
+MOLE_DESCRIBE(Imu, ax, mode);
+
+struct Inner {
+    int16_t val;
+};
+MOLE_DESCRIBE(Inner, val);
+
+struct Outer {
+    Inner inner;
+    float f;
+};
+MOLE_DESCRIBE(Outer, inner, f);
+
+struct MetaDef {
+    uint8_t type;
+    std::vector<uint8_t> payload;
+};
+
+static std::vector<MetaDef> drain_meta() {
+    std::vector<MetaDef> out;
+    mole::detail::MetaView mv;
+    uint8_t buf[255];
+    while (mole::detail::meta_pop(&mv, buf)) {
+        out.push_back({mv.type, std::vector<uint8_t>(buf, buf + mv.len)});
+    }
+    return out;
+}
+
+static void test_descriptores() {
+    mole::detail::reset_for_tests();
+
+    // ---- Sens: BE por campo, offsets/sizeof reales del compilador ----
+    static_assert(offsetof(Sens, b) == 2, "layout esperado");
+    static_assert(sizeof(Sens) == 4, "padding esperado");
+    Sens s;
+    const uint8_t mem[4] = {0x11, 0xEE, 0x22, 0x33};  // b guardado BE
+    std::memcpy(&s, mem, 4);
+    MOLE_INFO("s={}", s);
+
+    auto defs = drain_meta();
+    // sym a, sym b, TYPE_DEF, sym archivo, FMT_DEF
+    CHECK(defs.size() == 5);
+    CHECK(defs[2].type == mole::REC_TYPE_DEF);
+    const auto& td = defs[2].payload;
+    const uint16_t sens_tid = mole::get_u16(td.data());
+    CHECK(td[2] == 4 && std::memcmp(td.data() + 3, "Sens", 4) == 0);
+    CHECK(td[7] == 2);  // nfields
+    // campo a: wire u8, flags BE, offset 0, size 1
+    CHECK(td[10] == mole::WIRE_U8 && td[11] == mole::kFieldFlagBE);
+    CHECK(mole::get_u16(td.data() + 12) == 0 && mole::get_u16(td.data() + 14) == 1);
+    // campo b: wire u16, flags BE, offset 2, size 2
+    CHECK(td[20] == mole::WIRE_U16 && td[21] == mole::kFieldFlagBE);
+    CHECK(mole::get_u16(td.data() + 22) == 2 && mole::get_u16(td.data() + 24) == 2);
+    CHECK(defs[4].type == mole::REC_FMT_DEF);
+    // tag del arg: 0xF0 + type_id inline (REC-44)
+    CHECK(defs[4].payload[7] == mole::WIRE_STRUCT);
+    CHECK(mole::get_u16(defs[4].payload.data() + 8) == sens_tid);
+
+    // record: modo valores sin padding, bytes tal como estan en memoria —
+    // exactamente el vector args-struct-values
+    uint8_t buf[255], type, len;
+    uint64_t t;
+    CHECK(pop_ring0(&type, &t, buf, &len));
+    CHECK(len == 7 + 3);
+    CHECK(hex(buf + 7, 3) == "112233");
+
+    // ---- Imu: arreglo (REC-54) + enum descripto (REC-53) ----
+    Imu imu{{1.0f, 2.0f, 3.0f}, Mode::AVG};
+    MOLE_INFO("imu={}", imu);
+    defs = drain_meta();
+    const MetaDef* imu_td = nullptr;
+    const MetaDef* enum_td = nullptr;
+    for (const auto& d : defs) {
+        if (d.type == mole::REC_TYPE_DEF) imu_td = &d;
+        if (d.type == mole::REC_ENUM_DEF) enum_td = &d;
+    }
+    CHECK(imu_td && enum_td);
+    // el ENUM_DEF viaja ANTES que el TYPE_DEF que lo referencia
+    CHECK(&defs.front() <= enum_td && enum_td < imu_td);
+    const uint16_t mode_tid = mole::get_u16(enum_td->payload.data());
+    // base u8, 3 entradas: RAW=0, AVG=1, MEDIAN=2
+    const auto& ep = enum_td->payload;
+    const size_t base_off = 3 + ep[2];
+    CHECK(ep[base_off] == mole::WIRE_U8);
+    CHECK(ep[base_off + 1] == 3);
+    CHECK(ep[base_off + 2] == 0 && ep[base_off + 5] == 1 && ep[base_off + 8] == 2);
+    // campos de Imu: ax f32 ARRAY size 12; mode u8 ENUM ref=mode_tid
+    const auto& ip = imu_td->payload;
+    const size_t f0 = 3 + ip[2] + 1;
+    CHECK(ip[f0 + 2] == mole::WIRE_F32 && ip[f0 + 3] == mole::kFieldFlagArray);
+    CHECK(mole::get_u16(ip.data() + f0 + 6) == 12);
+    CHECK(ip[f0 + 12] == mole::WIRE_U8 && ip[f0 + 13] == mole::kFieldFlagEnum);
+    CHECK(mole::get_u16(ip.data() + f0 + 18) == mode_tid);
+    CHECK(pop_ring0(&type, &t, buf, &len));
+    CHECK(len == 7 + 13);
+    CHECK(hex(buf + 7, 13) == "0000803f000000400000404001");
+
+    // ---- enum suelto como argumento: tag 0xF1 + type_id (REC-53) ----
+    Mode m = Mode::MEDIAN;
+    MOLE_INFO("modo={}", m);
+    defs = drain_meta();
+    CHECK(defs.size() == 1 && defs[0].type == mole::REC_FMT_DEF);
+    CHECK(defs[0].payload[7] == 0xF1);
+    CHECK(mole::get_u16(defs[0].payload.data() + 8) == mode_tid);
+    CHECK(pop_ring0(&type, &t, buf, &len));
+    CHECK(len == 8 && buf[7] == 2);
+
+    // ---- anidado: empaquetado secuencial sin padding (Q-3) ----
+    Outer o{{-5}, 1.5f};
+    MOLE_INFO("o={}", o);
+    defs = drain_meta();
+    int tds = 0;
+    for (const auto& d : defs) {
+        if (d.type == mole::REC_TYPE_DEF) tds++;
+    }
+    CHECK(tds == 2);  // Inner antes que Outer
+    CHECK(pop_ring0(&type, &t, buf, &len));
+    CHECK(len == 7 + 6);
+    CHECK(hex(buf + 7, 6) == "fbff0000c03f");
+
+    // ---- MOLE_BYTES: hexdump inline degradado (REC-48) ----
+    MOLE_INFO("crudo {}", MOLE_BYTES(s));
+    defs = drain_meta();
+    CHECK(defs.size() == 1 && defs[0].type == mole::REC_FMT_DEF);
+    CHECK(pop_ring0(&type, &t, buf, &len));
+    CHECK(buf[7] == 8);  // prefijo PR-20: 4 bytes → 8 chars hex
+    CHECK(std::memcmp(buf + 8, "11ee2233", 8) == 0);
+}
+
 int main() {
     test_intern_secuencial_y_dedup();
     test_sym_def_bytes_contra_vector();
@@ -441,6 +587,7 @@ int main() {
     test_log_tag_y_filtro_en_productor();
     test_cadenas_literal_vs_runtime();
     test_logs_fallback();
+    test_descriptores();
     if (g_fails == 0) {
         std::puts("core_test: ok");
         return 0;
