@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: MIT
+// mole_internal.h — estado interno del core, compartido entre mole_core.cpp,
+// mole_task.cpp y los tests de host. No es API pública.
+#pragma once
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "mole_config.h"
+#include "mole_wire.h"
+
+namespace mole {
+namespace detail {
+
+// Tamaño de la cola de definiciones de catálogo (camino frío: cada sitio
+// pasa por acá una sola vez en la vida del proceso).
+inline constexpr size_t kMetaFifoSize = 2048;
+
+// Vista de una definición pendiente de emitir.
+struct MetaView {
+    uint8_t type = 0;
+    uint64_t t_us = 0;
+    const uint8_t* payload = nullptr;
+    uint8_t len = 0;
+};
+
+// Encola una definición de catálogo (REC_SYM_DEF/FMT_DEF/TYPE_DEF/ENUM_DEF).
+// Alimenta el catalog_hash (CAT-08) en orden de encolado. Si la cola está
+// llena, contabiliza el descarte: el resync (CAT-10) es la red de seguridad.
+bool meta_push(uint8_t type, const uint8_t* payload, uint8_t len);
+
+// Saca la definición más vieja copiándola a buf (≥255 bytes). La moleTask
+// drena esto ANTES que los rings, así toda definición viaja antes o junto
+// con su primer uso.
+bool meta_pop(MetaView* out, uint8_t* buf);
+
+// Cantidad de definiciones descartadas por cola llena.
+uint32_t meta_dropped();
+
+// catalog_hash incremental (CAT-08).
+uint32_t catalog_hash();
+
+// Contador de overflow de símbolos (CAT-05).
+uint16_t sym_overflow_count();
+
+// Reinicio total del estado del core — SOLO para tests de host.
+void reset_for_tests();
+
+// ---------------------------------------------------------------------------
+// Rings y políticas (FW-04/05/08, PR-12)
+// ---------------------------------------------------------------------------
+
+// Interpretación de los 8 slots de dropped_by_kind de REC_STATS (PR-13).
+enum Channel : uint8_t {
+    CH_LOG = 0,
+    CH_WATCH = 1,
+    CH_SPAN = 2,
+    CH_COUNTER = 3,
+    CH_DUMP = 4,
+    CH_EVENT = 5,
+    CH_STATE = 6,
+    CH_OTHER = 7,  // meta, blobs, checks, ctrl
+};
+
+enum class Policy : uint8_t {
+    Block = 0,
+    DropNewest = 1,
+    DropOldest = 2,  // en rings degrada a DropNewest; el "último valor"
+                     // de watch (su caso real) se implementa en T-06
+    Decimate = 3,
+};
+
+// Canal de un tipo de record (para política y contabilidad).
+Channel channel_of(uint8_t rec_type);
+
+// Política vigente de un canal (CTL_SET_POLICY la cambia en vivo).
+void set_policy(Channel ch, Policy p);
+Policy policy_of(Channel ch);
+
+// Encola un record desde la tarea actual (slot implícito, FW-04) aplicando
+// la política del canal. Devuelve false si se descartó (ya contabilizado).
+bool ring_push(uint8_t rec_type, const uint8_t* payload, uint8_t len);
+
+// Encola desde ISR (ring dedicado, FW-05). Nunca bloquea.
+bool isr_push(uint8_t rec_type, const uint8_t* payload, uint8_t len);
+
+// Crea el ring de ISR si no existe (lo llama begin(); expuesto para tests).
+void ensure_isr_ring();
+
+// Lado consumidor (moleTask): drena el ring del slot dado o el de ISR.
+// buf debe tener ≥255 bytes.
+bool ring_pop_slot(uint8_t slot, uint8_t* rec_type, uint64_t* t_us,
+                   uint8_t* buf, uint8_t* len);
+bool isr_pop(uint8_t* rec_type, uint64_t* t_us, uint8_t* buf, uint8_t* len);
+
+// Contadores agregados (PR-13).
+struct RingStats {
+    uint32_t enqueued = 0;
+    uint32_t dropped = 0;
+    uint16_t dropped_by_kind[8] = {};
+    uint16_t ring_high_water = 0;
+};
+RingStats ring_stats();
+
+}  // namespace detail
+}  // namespace mole
