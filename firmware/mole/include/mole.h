@@ -7,6 +7,8 @@
 #include "mole_config.h"
 #include "mole_wire.h"
 
+#include "mole_log.h"
+
 #if MOLE_ENABLED
 
 #include <stddef.h>
@@ -14,23 +16,20 @@
 
 namespace mole {
 
-// Niveles — REC-02.
-enum class Level : uint8_t {
-    Trace = 0,
-    Debug = 1,
-    Info = 2,
-    Warn = 3,
-    Error = 4,
-    Fatal = 5,
-};
-
-using SymId = uint16_t;
-
 // Registro de símbolos (CAT-01/02). El costo en régimen del hot path es el
-// load de un static local que guarda el id ya resuelto.
+// load de un static local que guarda el id ya resuelto. Declarada en
+// mole_log.h; acá se agrega el default de parent.
 // CONTRATO: `name` DEBE apuntar a memoria estable (un literal); no se copia.
 // Las macros lo garantizan por construcción.
 SymId intern(const char* name, SymKind kind, SymId parent = kSymNone);
+
+// Fallback: mensaje ya formateado en el MCU (REC-36). Se accede por acá,
+// nunca por las macros. Para mensajes armados en runtime.
+void logs(Level lvl, const char* msg);
+
+// Nivel mínimo global y por tag (PR-19); los cambia CTL_SET_LEVEL en vivo.
+void set_min_level(Level lvl);
+void set_tag_level(SymId tag, Level lvl);
 
 // Estadísticas internas (PR-13). Snapshot consistente para tests y REC_STATS.
 struct Stats {

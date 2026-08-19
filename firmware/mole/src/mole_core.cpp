@@ -60,11 +60,19 @@ struct Core {
     // decimación: contador por canal para descartar 1 de cada N bajo presión
     std::atomic<uint32_t> decim_seq[8];
 
+    // ---- log diferido (REC-34) y niveles (PR-19) ----
+    std::atomic<uint16_t> fmt_next{1};
+    std::atomic<uint8_t> min_level{0};
+    // nivel por tag; índice = sym_id (0 = sin tag). u8 atómico, escrito por
+    // CTL_SET_LEVEL, leído en el hot path.
+    std::atomic<uint8_t> tag_level[MOLE_MAX_SYMBOLS + 1];
+
     Core() {
         // defaults de PR-12: DropNewest para todo; Block/Decimate se piden
         for (auto& p : policies) p.store(static_cast<uint8_t>(detail::Policy::DropNewest));
         for (auto& d : dropped_by_kind) d.store(0);
         for (auto& d : decim_seq) d.store(0);
+        for (auto& t : tag_level) t.store(0);
     }
 };
 
@@ -393,10 +401,95 @@ SymId intern(const char* name, SymKind kind, SymId parent) {
 
 Stats stats() {
     Core& c = core();
-    std::lock_guard<std::mutex> lock(c.mtx);
+    const detail::RingStats rs = detail::ring_stats();
     Stats s;
-    s.sym_overflow = c.sym_overflow;
+    s.enqueued = rs.enqueued;
+    s.dropped = rs.dropped;
+    for (int i = 0; i < 8; i++) s.dropped_by_kind[i] = rs.dropped_by_kind[i];
+    s.ring_high_water = rs.ring_high_water;
+    {
+        std::lock_guard<std::mutex> lock(c.mtx);
+        s.sym_overflow = c.sym_overflow;
+    }
     return s;
+}
+
+// ---------------------------------------------------------------------------
+// Log diferido (F1-T04)
+// ---------------------------------------------------------------------------
+
+namespace detail {
+
+bool log_enabled(uint8_t level, SymId tag) {
+    Core& c = core();
+    if (level < c.min_level.load(std::memory_order_relaxed)) return false;
+    if (tag != 0 && tag <= MOLE_MAX_SYMBOLS &&
+        level < c.tag_level[tag].load(std::memory_order_relaxed)) {
+        return false;
+    }
+    // MOLE_LEVEL_MIN (FW-13) filtra en compilación en las macros de F2;
+    // acá vale el filtro de runtime.
+    return true;
+}
+
+uint16_t register_fmt(const char* fmt, const char* file, uint16_t line,
+                      uint8_t argc, const uint8_t* tags, uint8_t tags_len) {
+    Core& c = core();
+#if MOLE_LOG_SOURCE
+    const SymId file_sym = intern(file, KIND_FILE, 0);
+#else
+    (void)file;
+    const SymId file_sym = 0;
+#endif
+    const uint16_t id = c.fmt_next.fetch_add(1, std::memory_order_relaxed);
+
+    // payload REC-34: fmt_id, file_sym, line, argc, arg_types, fmt (PR-20)
+    uint8_t payload[255];
+    put_u16(payload, id);
+    put_u16(payload + 2, file_sym);
+    put_u16(payload + 4, line);
+    payload[6] = argc;
+    std::memcpy(payload + 7, tags, tags_len);
+    size_t fmt_len = std::strlen(fmt);
+    const size_t max_fmt = 255 - (7 + tags_len + 1);
+    if (fmt_len > max_fmt) fmt_len = max_fmt;
+    payload[7 + tags_len] = static_cast<uint8_t>(fmt_len);
+    std::memcpy(payload + 7 + tags_len + 1, fmt, fmt_len);
+    meta_push(REC_FMT_DEF, payload, static_cast<uint8_t>(7 + tags_len + 1 + fmt_len));
+    return id;
+}
+
+void count_oversize_log() {
+    count_drop(core(), CH_LOG);
+}
+
+}  // namespace detail
+
+void set_min_level(Level lvl) {
+    core().min_level.store(static_cast<uint8_t>(lvl), std::memory_order_relaxed);
+}
+
+void set_tag_level(SymId tag, Level lvl) {
+    if (tag == 0 || tag > MOLE_MAX_SYMBOLS) return;
+    core().tag_level[tag].store(static_cast<uint8_t>(lvl), std::memory_order_relaxed);
+}
+
+void logs(Level lvl, const char* msg) {
+    if (!detail::log_enabled(static_cast<uint8_t>(lvl), 0)) return;
+    // REC-36: {level, task, core, tag_sym, file_sym, line, msg} — sin las
+    // macros no hay sitio, así que tag/file/line van en cero.
+    uint8_t payload[255];
+    payload[0] = static_cast<uint8_t>(lvl);
+    payload[1] = port::task_slot();
+    payload[2] = port::core_id();
+    put_u16(payload + 3, 0);
+    put_u16(payload + 5, 0);
+    put_u16(payload + 7, 0);
+    size_t n = msg ? std::strlen(msg) : 0;
+    if (n > 200) n = 200;  // REC-05
+    payload[9] = static_cast<uint8_t>(n);
+    std::memcpy(payload + 10, msg, n);
+    detail::ring_push(REC_LOG, payload, static_cast<uint8_t>(10 + n));
 }
 
 }  // namespace mole

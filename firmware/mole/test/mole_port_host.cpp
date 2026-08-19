@@ -30,6 +30,10 @@ bool in_isr() {
     return false;
 }
 
+uint8_t core_id() {
+    return 0;
+}
+
 void yield_short() {
     std::this_thread::yield();
 }

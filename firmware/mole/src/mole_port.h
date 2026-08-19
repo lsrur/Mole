@@ -21,6 +21,9 @@ uint8_t task_slot();
 // ¿Estamos en contexto de interrupción? (FW-05)
 bool in_isr();
 
+// Core actual (xPortGetCoreID en el target; 0 en host).
+uint8_t core_id();
+
 // Espera corta para la política Block (vTaskDelay en el target). El
 // deadline se controla con now_us(); esto solo cede la CPU.
 void yield_short();

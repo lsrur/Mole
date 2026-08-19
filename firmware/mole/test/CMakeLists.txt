@@ -26,6 +26,34 @@ target_link_libraries(core_test PRIVATE mole_codec)
 find_package(Threads REQUIRED)
 target_link_libraries(core_test PRIVATE Threads::Threads)
 
+# REC-33: un fmt cuya cantidad de {} no coincide con los argumentos NO debe
+# compilar. Control positivo primero: el uso correcto SÍ compila (si no,
+# el chequeo negativo sería vacuo).
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/holes_ok.cpp
+"#include \"mole.h\"\nvoid f() { MOLE_INFO(\"x={} y={}\", 1, 2); }\n")
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/holes_fail.cpp
+"#include \"mole.h\"\nvoid f() { MOLE_INFO(\"x={} y={}\", 1); }\n")
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+try_compile(HOLES_BIEN_COMPILA
+  ${CMAKE_CURRENT_BINARY_DIR}/holes_check_ok
+  SOURCES ${CMAKE_CURRENT_BINARY_DIR}/holes_ok.cpp
+  CMAKE_FLAGS "-DINCLUDE_DIRECTORIES=${CMAKE_CURRENT_SOURCE_DIR}/../include;${CMAKE_CURRENT_SOURCE_DIR}/../src"
+  CXX_STANDARD 17
+)
+try_compile(HOLES_MAL_COMPILA
+  ${CMAKE_CURRENT_BINARY_DIR}/holes_check
+  SOURCES ${CMAKE_CURRENT_BINARY_DIR}/holes_fail.cpp
+  CMAKE_FLAGS "-DINCLUDE_DIRECTORIES=${CMAKE_CURRENT_SOURCE_DIR}/../include;${CMAKE_CURRENT_SOURCE_DIR}/../src"
+  CXX_STANDARD 17
+)
+unset(CMAKE_TRY_COMPILE_TARGET_TYPE)
+if(NOT HOLES_BIEN_COMPILA)
+  message(FATAL_ERROR "el control positivo de REC-33 no compila: chequeo vacuo")
+endif()
+if(HOLES_MAL_COMPILA)
+  message(FATAL_ERROR "REC-33 roto: un log con {} de mas COMPILO y debia fallar")
+endif()
+
 enable_testing()
 add_test(
   NAME codec_test
