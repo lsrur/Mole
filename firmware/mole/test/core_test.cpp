@@ -274,15 +274,21 @@ static void test_spsc_concurrente() {
         uint8_t buf[255], type, len;
         uint64_t t;
         uint32_t expected_seq = 0;
-        while (!done.load() || true) {
+        auto consume = [&] {
+            uint32_t seq;
+            std::memcpy(&seq, buf, 4);
+            // en orden estricto (SPSC): las secuencias solo crecen
+            if (seq < expected_seq) bad++;
+            expected_seq = seq + 1;
+            received.fetch_add(1);
+        };
+        while (true) {
             if (mole::detail::ring_pop_slot(0, &type, &t, buf, &len)) {
-                uint32_t seq;
-                std::memcpy(&seq, buf, 4);
-                // en orden estricto (SPSC): las secuencias solo crecen
-                if (seq < expected_seq) bad++;
-                expected_seq = seq + 1;
-                received.fetch_add(1);
+                consume();
             } else if (done.load()) {
+                // el pop fallido pudo ser anterior a los últimos push del
+                // productor; con done visto ya no entra nada más: drenar
+                while (mole::detail::ring_pop_slot(0, &type, &t, buf, &len)) consume();
                 break;
             }
         }
