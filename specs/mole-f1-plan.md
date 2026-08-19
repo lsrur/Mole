@@ -1,8 +1,8 @@
 ---
 doc: mole-f1-plan.md
-version: 0.1.0
+version: 0.2.0
 fecha: 2026-08-18
-estado: BORRADOR — para debate
+estado: PARA EJECUTAR (frente host; el frente hardware espera la placa)
 depende_de: mole-spec.md v2.0.0-draft.11 (§6 y §7 congeladas); F0 completo
 ejecutor: Claude Code
 ---
@@ -14,6 +14,7 @@ ejecutor: Claude Code
 | Versión | Fecha | Cambios |
 |---|---|---|
 | 0.1.0 | 2026-08-18 | Borrador inicial. |
+| 0.2.0 | 2026-08-18 | Q-1..Q-4 resueltas: sin placa todavía (frente host arranca, T-08/09/12/13/14 esperan una ESP32-S3 con USB nativo); IDF pineado a v5.5.x; `serialport-rs`; sin instrumento (PERF-03 pendiente formal, PERF-01/02 por ciclos). |
 
 ---
 
@@ -132,13 +133,13 @@ Un commit por tarea (C-5). Las tareas 02–07 corren enteras en host; el hardwar
 
 ## 6. Riesgos y preguntas
 
-**Q-1 — ¿Qué hardware hay?** El plan asume una ESP32-S3 con USB nativo accesible. Si la placa disponible es otra (S2, C3, ESP32 clásico), cambia el transporte de referencia y las metas alcanzables (PERF-04 es específico de CDC en S2/S3). **Bloquea T-08+.**
+**Q-1 — ~~¿Qué hardware hay?~~ RESUELTO (0.2.0): ninguno todavía.** Se ejecuta el **frente host** (T-01..T-07, T-10, T-11 salvo su prueba con puerto real, T-15, T-16). T-08, T-09, T-12, T-13 y T-14 quedan bloqueadas hasta enchufar una **ESP32-S3 con USB nativo accesible** (recomendación: DevKitC-1, trae los dos puertos). El código de esas tareas puede escribirse antes; sus condiciones de terminado exigen la placa.
 
-**Q-2 — Versión de IDF.** Propuesta: pinear `v5.5.x` (estable, base de Arduino-ESP32 v3). El `v6.0-dev` local no sirve como base de medición. Instalar el release es media hora de descarga, no un riesgo.
+**Q-2 — ~~Versión de IDF.~~ RESUELTO (0.2.0): pineado a `v5.5.x`.** El `v6.0-dev` local queda fuera de la base de medición.
 
-**Q-3 — Crate serial de `molectl`.** Propuesta: `serialport-rs` (maduro, multiplataforma, suficiente para CDC y UART). `nusb` recién tiene sentido si se abre TR-05 (PA-03), y PA-03 se decide después de medir — exactamente para eso es F1.
+**Q-3 — ~~Crate serial.~~ RESUELTO (0.2.0): `serialport-rs`.** `nusb` recién si PA-03 se abre después de medir.
 
-**Q-4 — Instrumento para PERF-03/TEST-07.** ¿Hay analizador lógico u osciloscopio? Si no, PERF-01/02 quedan medidos por ciclos (válido pero interno) y PERF-03 pendiente formal hasta tenerlo.
+**Q-4 — ~~Instrumento.~~ RESUELTO (0.2.0): no hay.** PERF-01/02/14 se miden por contador de ciclos; PERF-03 y la validación por GPIO (TEST-07) quedan **pendientes formales** anotadas en la spec hasta que haya analizador u osciloscopio.
 
 **Q-5 — PERF-01 en la práctica.** <1 µs son ~240 ciclos: entra un `load` del sym estático + empaquetado a ring SPSC sin contención, pero no sobra nada. Si el p99 se pasa por el camino de registro perezoso (primera ejecución), la medición DEBE excluir la primera llamada — el presupuesto es de régimen. Si aún así no llega, PERF-13: se anota el número real y se decide con datos.
 
