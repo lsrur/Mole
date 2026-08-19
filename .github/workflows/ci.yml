@@ -5,6 +5,8 @@ on:
   pull_request:
 
 jobs:
+  # S-2: el codec de Rust contra los vectores (via tests del workspace,
+  # que incluyen la validacion de codec_vectors.json y TEST-08 de mole-fmt → S-7)
   rust:
     runs-on: ubuntu-latest
     steps:
@@ -13,10 +15,14 @@ jobs:
       - name: Build
         run: cargo build --workspace --locked
         working-directory: host
-      - name: Test
+      - name: Test (S-2, S-5, S-7)
         run: cargo test --workspace --locked
         working-directory: host
+      - name: Validar codec_vectors.json contra el codec
+        run: cargo run --locked -p mole-vectors -- validate ../protocol/codec_vectors.json
+        working-directory: host
 
+  # S-3: el codec de C++ contra EL MISMO archivo de vectores, compilado en host
   cpp:
     runs-on: ubuntu-latest
     steps:
@@ -25,8 +31,37 @@ jobs:
         run: cmake -S firmware/mole/test -B firmware/mole/test/build
       - name: Build
         run: cmake --build firmware/mole/test/build
-      - name: Test
+      - name: Test (S-3, S-5)
         run: ctest --test-dir firmware/mole/test/build --output-on-failure
 
-  # T-16 agrega: validación de codec_vectors.json contra su schema
-  # y verificación cruzada con anchors.py.
+  # S-1: el archivo valida contra su JSON Schema, los 12 ancla se recalculan
+  # y la verificacion cruzada (V-2.3) recalcula todo lo que anchors.py alcanza
+  vectors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar jsonschema
+        run: pip install jsonschema
+      - name: Validar contra el schema
+        working-directory: protocol
+        run: |
+          python3 - << 'EOF'
+          import json, sys
+          from jsonschema import Draft202012Validator
+          schema = json.load(open("codec_vectors.schema.json"))
+          Draft202012Validator.check_schema(schema)
+          doc = json.load(open("codec_vectors.json"))
+          errs = list(Draft202012Validator(schema).iter_errors(doc))
+          for e in errs:
+              print("SCHEMA:", e.json_path, e.message)
+          sys.exit(1 if errs else 0)
+          EOF
+      - name: Recalcular los 12 ancla (S-4)
+        working-directory: protocol
+        run: python3 anchors.py
+      - name: Verificacion cruzada (V-2.3)
+        working-directory: protocol
+        run: python3 anchors.py --check codec_vectors.json
